@@ -1,6 +1,15 @@
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+function Convert-ToLf {
+    param([string]$Path)
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    $normalized = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+    [System.IO.File]::WriteAllText($Path, $normalized, $utf8NoBom)
+}
 
 Push-Location "$repoRoot/demo"
 try {
@@ -29,5 +38,8 @@ try {
 finally {
     Pop-Location
 }
+
+Convert-ToLf (Join-Path $repoRoot 'demo/src/api/generated/schema.ts')
+Convert-ToLf (Join-Path $repoRoot 'backend/app/contracts/generated/models.py')
 
 Write-Host '[OK] Frontend and backend contracts generated from contracts/openapi.yaml'

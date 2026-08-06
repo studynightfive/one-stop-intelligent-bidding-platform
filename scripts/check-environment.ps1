@@ -18,7 +18,11 @@ Push-Location $repoRoot
 try {
     Assert-ExactVersion 'Node.js' (& node --version) 'v24.16.0'
     Assert-ExactVersion 'npm' (& npm --version) '11.13.0'
-    Assert-ExactVersion 'uv wrapper' (& $PSScriptRoot/uv.ps1 --version) 'uv 0.5.11 (c4d0caaee 2024-12-19)'
+    $uvVersion = (& $PSScriptRoot/uv.ps1 --version)
+    if ($uvVersion -notmatch '^uv 0\.5\.11(?:\s+\(.+\))?$') {
+        throw "uv wrapper version mismatch: expected 0.5.11, got $uvVersion"
+    }
+    Write-Host '[OK] uv wrapper 0.5.11'
     Assert-ExactVersion 'Python' (& $PSScriptRoot/uv.ps1 run --python 3.11.11 python --version) 'Python 3.11.11'
 
     $opensslVersion = (& openssl version)
