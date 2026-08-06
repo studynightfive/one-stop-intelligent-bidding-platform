@@ -1,0 +1,51 @@
+# Local agent/editor state
+.workbuddy/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+
+# Frontend
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+
+# Python/backend
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Runtime data
+uploads/
+data/
+volumes/
+*.db
+*.sqlite*
+celerybeat-schedule*
+
+# Temporary/output files
+tmp/
+temp/
+*.log
+*.bak
+*.tmp
