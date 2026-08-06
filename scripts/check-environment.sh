@@ -18,7 +18,11 @@ assert_exact() {
 
 assert_exact "Node.js" "$(node --version)" "v24.16.0"
 assert_exact "npm" "$(npm --version)" "11.13.0"
-assert_exact "uv wrapper" "$($SCRIPT_DIR/uv.sh --version)" "uv 0.5.11 (c4d0caaee 2024-12-19)"
+uv_version=$($SCRIPT_DIR/uv.sh --version)
+case "$uv_version" in
+  "uv 0.5.11"|"uv 0.5.11 ("*")") echo '[OK] uv wrapper 0.5.11' ;;
+  *) echo "uv wrapper version mismatch: expected 0.5.11, got $uv_version" >&2; exit 1 ;;
+esac
 assert_exact "Python" "$($SCRIPT_DIR/uv.sh run --python 3.11.11 python --version 2>&1)" "Python 3.11.11"
 
 version_at_least() {

@@ -137,7 +137,13 @@ jobs:
         run: bash scripts/start.sh
       - name: Tear down smoke stack
         if: always()
-        run: docker compose --env-file .env -f infra/compose.yaml down --volumes --remove-orphans
+        run: |
+          if [ -f .env ]; then
+            ENV_FILE=.env
+          else
+            ENV_FILE=.env.example
+          fi
+          docker compose --env-file "$ENV_FILE" -f infra/compose.yaml down --volumes --remove-orphans
 
   security:
     runs-on: ubuntu-latest
