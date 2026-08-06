@@ -28,7 +28,10 @@ export function usePagedBidTasks(query: ListBidTasksQuery, depsKey: string) {
   }, [depsKey]) // eslint-disable-line react-hooks/exhaustive-deps -- depsKey encodes query
 
   useEffect(() => {
-    void reload()
+    const timer = window.setTimeout(() => {
+      void reload()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [reload])
 
   return { data, meta, loading, error, reload }

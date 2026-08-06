@@ -47,9 +47,7 @@ export default function DashboardView() {
     setMockBidTaskSource(() => tasks as BidTaskViewModel[])
   }, [tasks])
 
-  useEffect(() => {
-    setPage(1)
-  }, [filter, keyword, assigneeFilter, quickFilter])
+  const resetPage = () => setPage(1)
 
   const listQuery = useMemo(() => ({
     page,
@@ -185,7 +183,7 @@ export default function DashboardView() {
             <button
               key={stat.label}
               type="button"
-              onClick={() => setFilter(stat.filter)}
+              onClick={() => { setFilter(stat.filter); resetPage() }}
               className={`bg-white text-left rounded-xl border p-4 flex items-center gap-3 transition-all hover:-translate-y-0.5 hover:shadow-sm ${filter === stat.filter ? 'border-[#2563EB] ring-1 ring-[#DBEAFE]' : 'border-[#E2E8F0]'}`}
             >
               <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: stat.bg }}>
@@ -205,20 +203,20 @@ export default function DashboardView() {
           <Input
             allowClear
             value={keyword}
-            onChange={event => setKeyword(event.target.value)}
+            onChange={event => { setKeyword(event.target.value); resetPage() }}
             prefix={<Search size={15} className="text-[#94A3B8]" />}
             placeholder="搜索项目名称、编号或招标方"
             className="md:max-w-[320px]"
           />
           <Select
             value={assigneeFilter}
-            onChange={setAssigneeFilter}
+            onChange={value => { setAssigneeFilter(value); resetPage() }}
             className="md:w-36"
             options={[{ value: 'all', label: '全部负责人' }, ...assignees.map(name => ({ value: name, label: name }))]}
           />
           <Segmented
             value={quickFilter}
-            onChange={value => setQuickFilter(String(value))}
+            onChange={value => { setQuickFilter(String(value)); resetPage() }}
             options={[{ label: '全部项目', value: 'all' }, { label: '我的项目', value: 'mine' }, { label: '临近截止', value: 'due' }, { label: '风险项目', value: 'risk' }]}
           />
         </div>
@@ -243,7 +241,7 @@ export default function DashboardView() {
           ].map(f => (
             <button
               key={f.key}
-              onClick={() => setFilter(f.key)}
+              onClick={() => { setFilter(f.key); resetPage() }}
               className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
                 filter === f.key
                   ? 'bg-[#2563EB] text-white font-medium'

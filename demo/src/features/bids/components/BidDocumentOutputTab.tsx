@@ -33,7 +33,10 @@ export function BidDocumentOutputTab({ taskId, projectName }: { taskId: string; 
   }, [taskId])
 
   useEffect(() => {
-    void reload()
+    const timer = window.setTimeout(() => {
+      void reload()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [reload])
 
   const latestId = versions[0]?.id

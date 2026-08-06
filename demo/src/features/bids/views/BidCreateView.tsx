@@ -27,17 +27,22 @@ export default function BidCreateView() {
   const { bidTasks, addBidTask } = useDemo()
   const [form] = Form.useForm()
   const [current, setCurrent] = useState(0)
-  const [fileList, setFileList] = useState<any[]>([])
+  const [fileList, setFileList] = useState<any[]>(() => {
+    const draft = loadBidCreateDraft()
+    return draft?.fileName
+      ? [{ uid: 'draft-file', name: draft.fileName, status: 'done', size: draft.fileSize || 0 }]
+      : []
+  })
   const [parseOutcome, setParseOutcome] = useState<BidParseOutcome>('idle')
-  const [tenderFileId, setTenderFileId] = useState<string | undefined>()
+  const [tenderFileId, setTenderFileId] = useState<string | undefined>(() => loadBidCreateDraft()?.tenderFileId)
   const failNextParse = useRef(false)
-  const draftRestored = useRef(false)
+  const draftNoticeShown = useRef(false)
   const { progress: uploadProgress, upload: resumableUpload, cancel: cancelUpload, reset: resetUpload } = useResumableUpload()
   const { status: uiStatus, override, setUiOverride, retry } = useBidUiState({ bootstrapMs: 200 })
 
   useEffect(() => {
-    if (draftRestored.current) return
-    draftRestored.current = true
+    if (draftNoticeShown.current) return
+    draftNoticeShown.current = true
     const draft = loadBidCreateDraft()
     if (!draft) return
     const draftDeadline = draft.deadline ? dayjs(draft.deadline) : null
@@ -48,11 +53,8 @@ export default function BidCreateView() {
       deadline: draftDeadline?.isValid() ? draftDeadline : null,
       budget: draft.budget ?? null,
     })
-    if (draft.fileName) {
-      setFileList([{ uid: 'draft-file', name: draft.fileName, status: 'done', size: draft.fileSize || 0 }])
-    }
-    if (draft.tenderFileId) setTenderFileId(draft.tenderFileId)
-    message.info('已恢复本地草稿')
+    const timer = window.setTimeout(() => message.info('已恢复本地草稿'), 0)
+    return () => window.clearTimeout(timer)
   }, [form])
 
   const persistDraft = async () => {

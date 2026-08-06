@@ -17,17 +17,14 @@ export function useBidUiState(options: Options = {}) {
   const { bootstrapMs = 350, isEmpty = false } = options
   const [searchParams, setSearchParams] = useSearchParams()
   const override = parseBidUiState(searchParams.get(BID_UI_QUERY_KEY))
-  const [bootstrapped, setBootstrapped] = useState(bootstrapMs <= 0)
+  const [bootstrapped, setBootstrapped] = useState(() => bootstrapMs <= 0)
+  const [bootToken, setBootToken] = useState(0)
 
   useEffect(() => {
-    if (bootstrapMs <= 0 || override) {
-      setBootstrapped(true)
-      return
-    }
-    setBootstrapped(false)
+    if (bootstrapMs <= 0 || override) return undefined
     const timer = window.setTimeout(() => setBootstrapped(true), bootstrapMs)
     return () => window.clearTimeout(timer)
-  }, [bootstrapMs, override])
+  }, [bootstrapMs, override, bootToken])
 
   const status: BidUiState = useMemo(() => {
     if (override) return override
@@ -46,7 +43,7 @@ export function useBidUiState(options: Options = {}) {
   const clearOverrideAndRetry = () => {
     setUiOverride('clear')
     setBootstrapped(false)
-    window.setTimeout(() => setBootstrapped(true), bootstrapMs)
+    setBootToken(token => token + 1)
   }
 
   return {
