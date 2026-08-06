@@ -1,0 +1,13 @@
+{
+  "eventId": "evt_01JZZZZZZZZZZZZZZZZZZZZZZZ",
+  "type": "job.progress",
+  "occurredAt": "2026-08-06T05:30:00Z",
+  "aggregateType": "job",
+  "aggregateId": "job_01JZZZZZZZZZZZZZZZZZZZZZZZ",
+  "data": {
+    "jobId": "job_01JZZZZZZZZZZZZZZZZZZZZZZZ",
+    "status": "running",
+    "progressPercent": 45,
+    "currentStep": "extract_requirements"
+  }
+}

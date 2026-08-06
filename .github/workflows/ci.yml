@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ownership:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: 3.11.11
+      - name: Check branch file ownership
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          if [ "$HEAD_BRANCH" = "develop" ] && [ "$BASE_BRANCH" = "main" ]; then
+            echo "[OK] L0 release integration branch"
+          else
+            python scripts/check_ownership.py --branch "$HEAD_BRANCH" --base "origin/$BASE_BRANCH"
+          fi
+
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: 3.11.11
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.5.11
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24.16.0
+          cache: npm
+          cache-dependency-path: demo/package-lock.json
+      - name: Install locked dependencies
+        run: |
+          cd backend && uv sync --frozen
+          cd ../demo && npm ci --ignore-scripts
+      - name: Validate contract
+        run: cd backend && uv run --frozen python ../scripts/validate_contract.py
+      - name: Regenerate contract code
+        run: bash scripts/generate-contracts.sh
+      - name: Ensure generated code is current
+        run: git diff --exit-code -- demo/src/api/generated backend/app/contracts/generated
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24.16.0
+          cache: npm
+          cache-dependency-path: demo/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: demo
+      - run: npm run typecheck
+        working-directory: demo
+      - run: npm run lint
+        working-directory: demo
+      - run: npm run test
+        working-directory: demo
+      - run: npm run build
+        working-directory: demo
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: 3.11.11
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.5.11
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen
+        working-directory: backend
+      - run: uv run --frozen ruff check app tests migrations
+        working-directory: backend
+      - run: uv run --frozen ruff format --check app tests migrations
+        working-directory: backend
+      - run: uv run --frozen mypy app
+        working-directory: backend
+      - run: uv run --frozen pytest --cov=app --cov-report=term-missing --cov-fail-under=85
+        working-directory: backend
+      - name: Require one Alembic head
+        run: |
+          test "$(uv run --frozen alembic heads | wc -l)" -eq 1
+        working-directory: backend
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.2.0
+      - name: Validate Compose
+        run: docker compose --env-file .env.example -f infra/compose.yaml config --quiet
+      - name: Build API and Web images
+        run: docker compose --env-file .env.example -f infra/compose.yaml build api web
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  api-breaking-change:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect existing base contract
+        id: base-contract
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          if git cat-file -e "origin/$BASE_BRANCH:contracts/openapi.yaml" 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: oasdiff/oasdiff-action/breaking@v0.1.11
+        if: steps.base-contract.outputs.exists == 'true'
+        with:
+          base: origin/${{ github.base_ref }}:contracts/openapi.yaml
+          revision: HEAD:contracts/openapi.yaml
+          fail-on: WARN
+          review: false
