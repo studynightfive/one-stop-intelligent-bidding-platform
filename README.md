@@ -23,18 +23,16 @@
 Windows：
 
 ```powershell
-.\scripts\check-environment.ps1
-.\scripts\bootstrap.ps1
+.\scripts\start.ps1
 ```
 
 macOS/Linux：
 
 ```bash
-./scripts/check-environment.sh
-./scripts/bootstrap.sh
+./scripts/start.sh
 ```
 
-初始化脚本会创建本地 `.env` 和仅供开发使用的忽略密钥、安装锁定依赖、生成并校验契约代码。不会写入真实业务数据或生产密钥。
+一键启动脚本会初始化本地 `.env` 和仅供开发使用的忽略密钥、安装锁定依赖、生成并校验契约代码，再从空数据库启动核心容器并等待 API 与 Web 健康。不会写入真实业务数据或生产密钥。只初始化而不启动容器时，使用 `bootstrap.ps1` 或 `bootstrap.sh`。
 
 ## 运行当前前端 Demo
 
@@ -46,10 +44,10 @@ npm run dev
 
 浏览器打开：<http://127.0.0.1:3210>
 
-后端与完整本地服务：
+停止核心服务（保留命名数据卷）：
 
 ```powershell
-docker compose --env-file .env -f infra/compose.yaml up -d postgres redis minio minio-init mailpit api web
+.\scripts\stop.ps1
 ```
 
 API 文档：<http://127.0.0.1:8210/docs>。容器化前端：<http://127.0.0.1:3210>。直接运行的 Vite Demo 与容器化前端使用同一端口，二者只启动一个。
