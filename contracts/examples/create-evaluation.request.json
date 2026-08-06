@@ -1,0 +1,13 @@
+{
+  "sourceBidTaskId": "BID-2026-001",
+  "projectName": "智慧园区建设项目",
+  "tenderNo": "ZHYQ-2026-001",
+  "tenderEntity": "某市建设发展有限公司",
+  "budgetAmount": "5000000.00",
+  "currency": "CNY",
+  "supplierDeadline": "2026-09-05T09:00:00+08:00",
+  "evaluationStartAt": "2026-09-06T09:00:00+08:00",
+  "evaluationEndAt": "2026-09-08T18:00:00+08:00",
+  "description": "评标演示项目",
+  "assigneeId": "usr_project_lead_001"
+}

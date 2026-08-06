@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bid-platform.local/contracts/events.schema.json",
+  "title": "BidPlatformRealtimeEvent",
+  "description": "一站式智能招投标平台 WebSocket 事件。事件至少一次投递，客户端按 eventId 去重并通过 REST 刷新权威状态。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "type", "occurredAt", "aggregateType", "aggregateId", "data"],
+  "properties": {
+    "eventId": { "$ref": "#/$defs/Id" },
+    "type": { "$ref": "#/$defs/RealtimeEventType" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "aggregateType": {
+      "type": "string",
+      "enum": ["bidTask", "evaluation", "supplier", "job", "notification"]
+    },
+    "aggregateId": { "$ref": "#/$defs/Id" },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        { "$ref": "#/$defs/JobProgressEvent" },
+        { "$ref": "#/$defs/JobSucceededEvent" },
+        { "$ref": "#/$defs/JobFailedEvent" },
+        { "$ref": "#/$defs/NotificationCreatedEvent" },
+        { "$ref": "#/$defs/BidTaskUpdatedEvent" },
+        { "$ref": "#/$defs/BidMaterialUpdatedEvent" },
+        { "$ref": "#/$defs/BidReviewCompletedEvent" },
+        { "$ref": "#/$defs/EvaluationUpdatedEvent" },
+        { "$ref": "#/$defs/SupplierSubmittedEvent" },
+        { "$ref": "#/$defs/SupplementCreatedEvent" },
+        { "$ref": "#/$defs/PriceRoundOpenedEvent" },
+        { "$ref": "#/$defs/PriceRoundClosedEvent" },
+        { "$ref": "#/$defs/EvaluationClosedEvent" }
+      ]
+    }
+  ],
+  "$defs": {
+    "Id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "RealtimeEventType": {
+      "type": "string",
+      "enum": [
+        "job.progress",
+        "job.succeeded",
+        "job.failed",
+        "notification.created",
+        "bidTask.updated",
+        "bidMaterial.updated",
+        "bidReview.completed",
+        "evaluation.updated",
+        "supplier.submitted",
+        "supplement.created",
+        "priceRound.opened",
+        "priceRound.closed",
+        "evaluation.closed"
+      ]
+    },
+    "JobProgressData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "status", "progressPercent"],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/Id" },
+        "status": { "const": "running" },
+        "progressPercent": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "currentStep": { "type": "string" }
+      }
+    },
+    "JobSucceededData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "status"],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/Id" },
+        "status": { "const": "succeeded" },
+        "resultVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "JobFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "status", "error"],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/Id" },
+        "status": { "const": "failed" },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "retryable"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "retryable": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "NotificationCreatedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["notificationId", "type", "title"],
+      "properties": {
+        "notificationId": { "$ref": "#/$defs/Id" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "resourceType": { "type": "string" },
+        "resourceId": { "$ref": "#/$defs/Id" }
+      }
+    },
+    "VersionedAggregateData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resourceId", "status", "version"],
+      "properties": {
+        "resourceId": { "$ref": "#/$defs/Id" },
+        "status": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "SimpleResourceData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resourceId"],
+      "properties": {
+        "resourceId": { "$ref": "#/$defs/Id" },
+        "supplierId": { "$ref": "#/$defs/Id" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "JobProgressEvent": {
+      "properties": { "type": { "const": "job.progress" }, "data": { "$ref": "#/$defs/JobProgressData" } }
+    },
+    "JobSucceededEvent": {
+      "properties": { "type": { "const": "job.succeeded" }, "data": { "$ref": "#/$defs/JobSucceededData" } }
+    },
+    "JobFailedEvent": {
+      "properties": { "type": { "const": "job.failed" }, "data": { "$ref": "#/$defs/JobFailedData" } }
+    },
+    "NotificationCreatedEvent": {
+      "properties": { "type": { "const": "notification.created" }, "data": { "$ref": "#/$defs/NotificationCreatedData" } }
+    },
+    "BidTaskUpdatedEvent": {
+      "properties": { "type": { "const": "bidTask.updated" }, "data": { "$ref": "#/$defs/VersionedAggregateData" } }
+    },
+    "BidMaterialUpdatedEvent": {
+      "properties": { "type": { "const": "bidMaterial.updated" }, "data": { "$ref": "#/$defs/VersionedAggregateData" } }
+    },
+    "BidReviewCompletedEvent": {
+      "properties": { "type": { "const": "bidReview.completed" }, "data": { "$ref": "#/$defs/SimpleResourceData" } }
+    },
+    "EvaluationUpdatedEvent": {
+      "properties": { "type": { "const": "evaluation.updated" }, "data": { "$ref": "#/$defs/VersionedAggregateData" } }
+    },
+    "SupplierSubmittedEvent": {
+      "properties": { "type": { "const": "supplier.submitted" }, "data": { "$ref": "#/$defs/SimpleResourceData" } }
+    },
+    "SupplementCreatedEvent": {
+      "properties": { "type": { "const": "supplement.created" }, "data": { "$ref": "#/$defs/SimpleResourceData" } }
+    },
+    "PriceRoundOpenedEvent": {
+      "properties": { "type": { "const": "priceRound.opened" }, "data": { "$ref": "#/$defs/SimpleResourceData" } }
+    },
+    "PriceRoundClosedEvent": {
+      "properties": { "type": { "const": "priceRound.closed" }, "data": { "$ref": "#/$defs/SimpleResourceData" } }
+    },
+    "EvaluationClosedEvent": {
+      "properties": { "type": { "const": "evaluation.closed" }, "data": { "$ref": "#/$defs/VersionedAggregateData" } }
+    }
+  }
+}

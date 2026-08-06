@@ -1,0 +1,12 @@
+{
+  "success": false,
+  "error": {
+    "code": "VERSION_CONFLICT",
+    "message": "数据已被其他成员更新，请刷新后重试",
+    "details": {
+      "expectedVersion": 4,
+      "actualVersion": 5
+    }
+  },
+  "requestId": "req_01JZZZZZZZZZZZZZZZZZZZZZZZ"
+}

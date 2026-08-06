@@ -1,0 +1,22 @@
+# L0 独占文件。M1-M7 GitHub 账号登记后，由 L0 增补其领域路径。
+/PROJECT_MASTER_PROMPT.md @studynightfive
+/contracts/ @studynightfive
+/infra/ @studynightfive
+/scripts/ @studynightfive
+/.github/ @studynightfive
+/.env.example @studynightfive
+/.nvmrc @studynightfive
+/.python-version @studynightfive
+/.dockerignore @studynightfive
+/demo/package.json @studynightfive
+/demo/package-lock.json @studynightfive
+/demo/*config* @studynightfive
+/demo/src/api/generated/ @studynightfive
+/backend/pyproject.toml @studynightfive
+/backend/uv.lock @studynightfive
+/backend/alembic.ini @studynightfive
+/backend/migrations/ @studynightfive
+/backend/app/main.py @studynightfive
+/backend/app/models_registry.py @studynightfive
+/backend/app/api/ @studynightfive
+/backend/app/contracts/ @studynightfive
