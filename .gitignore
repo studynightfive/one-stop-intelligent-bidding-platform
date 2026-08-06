@@ -15,6 +15,9 @@ Thumbs.db
 *.key
 *.p12
 secrets/
+!infra/secrets/
+infra/secrets/*
+!infra/secrets/README.md
 
 # Frontend
 node_modules/
@@ -34,6 +37,7 @@ __pycache__/
 .ruff_cache/
 htmlcov/
 .coverage
+.uv-cache/
 
 # Runtime data
 uploads/

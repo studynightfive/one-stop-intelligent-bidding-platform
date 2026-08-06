@@ -1,0 +1,237 @@
+name: ${COMPOSE_PROJECT_NAME:-bidplat2026}
+
+x-backend-environment: &backend-environment
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  TZ: ${TZ:-UTC}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://bid_platform:change-me-local-only@postgres:5432/bid_platform}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-bidplat:development}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+  MINIO_BUCKET: ${MINIO_BUCKET:-bid-platform}
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER:-bid_platform_local}
+  MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-local-only}
+  MINIO_SECURE: ${MINIO_SECURE:-false}
+  MAIL_HOST: ${MAIL_HOST:-mailpit}
+  MAIL_PORT: ${MAIL_PORT:-1025}
+  MAIL_FROM: ${MAIL_FROM:-no-reply@bid-platform.local}
+  JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH:-/run/secrets/jwt_private_key}
+  JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public_key}
+  MODEL_MASTER_KEY_PATH: ${MODEL_MASTER_KEY_PATH:-/run/secrets/model_master_key}
+  ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
+  REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-7}
+  PORTAL_ACCESS_TOKEN_TTL_MINUTES: ${PORTAL_ACCESS_TOKEN_TTL_MINUTES:-30}
+  AI_FAKE_PROVIDER: ${AI_FAKE_PROVIDER:-true}
+  AI_DEFAULT_PROVIDER: ${AI_DEFAULT_PROVIDER:-qwen}
+  AI_REQUEST_TIMEOUT_SECONDS: ${AI_REQUEST_TIMEOUT_SECONDS:-60}
+  AI_MAX_RETRIES: ${AI_MAX_RETRIES:-3}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3210}
+  OPENAPI_CONTRACT_PATH: ${OPENAPI_CONTRACT_PATH:-/workspace/contracts/openapi.yaml}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.7.4-pg16
+    container_name: bidplat2026_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bid_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-bid_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [platform]
+
+  redis:
+    image: redis:7.2.5-alpine
+    container_name: bidplat2026_redis
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-56379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [platform]
+
+  minio:
+    image: minio/minio:RELEASE.2024-07-16T23-46-41Z
+    container_name: bidplat2026_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-bid_platform_local}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-local-only}
+    ports:
+      - "127.0.0.1:${MINIO_HOST_PORT:-59000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-59001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [platform]
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-07-15T19-02-30Z
+    container_name: bidplat2026_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >-
+      /bin/sh -c "mc alias set local http://minio:9000
+      $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${MINIO_BUCKET} &&
+      mc anonymous set none local/$${MINIO_BUCKET}"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-bid_platform_local}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-local-only}
+      MINIO_BUCKET: ${MINIO_BUCKET:-bid-platform}
+    restart: "no"
+    networks: [platform]
+
+  mailpit:
+    image: axllent/mailpit:v1.20.5
+    container_name: bidplat2026_mailpit
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-51025}:1025"
+      - "127.0.0.1:${MAILPIT_WEB_HOST_PORT:-58025}:8025"
+    restart: unless-stopped
+    networks: [platform]
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/backend.Dockerfile
+    image: bidplat2026/api:local
+    container_name: bidplat2026_api
+    command: ["/bin/sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    environment: *backend-environment
+    ports:
+      - "127.0.0.1:${API_PORT:-8210}:8000"
+    volumes:
+      - ./secrets/dev:/run/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/openapi.json')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks: [platform]
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/web.Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8210/api/v1}
+        VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
+    image: bidplat2026/web:local
+    container_name: bidplat2026_web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3210}:3210"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3210/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    networks: [platform]
+
+  worker:
+    profiles: ["workers"]
+    image: bidplat2026/api:local
+    container_name: bidplat2026_worker
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
+    environment: *backend-environment
+    volumes:
+      - ./secrets/dev:/run/secrets:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [platform]
+
+  flower:
+    profiles: ["workers", "observability"]
+    image: bidplat2026/api:local
+    container_name: bidplat2026_flower
+    command: ["celery", "-A", "app.workers.celery_app", "flower", "--port=5555"]
+    environment: *backend-environment
+    ports:
+      - "127.0.0.1:${FLOWER_HOST_PORT:-5556}:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [platform]
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.54.1
+    container_name: bidplat2026_prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-59090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+    networks: [platform]
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.2.0
+    container_name: bidplat2026_grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-local-only}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-53000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on: [prometheus]
+    restart: unless-stopped
+    networks: [platform]
+
+networks:
+  platform:
+    name: bidplat2026_network
+
+volumes:
+  postgres_data:
+    name: bidplat2026_postgres_data
+  redis_data:
+    name: bidplat2026_redis_data
+  minio_data:
+    name: bidplat2026_minio_data
+  prometheus_data:
+    name: bidplat2026_prometheus_data
+  grafana_data:
+    name: bidplat2026_grafana_data
