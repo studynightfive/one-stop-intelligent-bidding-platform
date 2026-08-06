@@ -1,10 +1,11 @@
-# 一站式智能招投标平台：全栈项目总提示词与协作契约 V3.0
+# 一站式智能招投标平台：全栈项目总提示词与协作契约 V3.1
 
 > 文档状态：**唯一权威开发提示词（Single Source of Truth）**
 > 适用对象：组长 + 7 名组员 + 所有辅助编码 AI
 > 基线日期：2026-08-06
 > 前端基线：当前 `demo/` 目录中的 React Demo
 > 旧文档关系：`PRD.md`、`ARCHITECTURE.md`、`DESIGN.md`、`SPEC.md` 仅作背景材料；与本文冲突时，**无条件以本文为准**。
+> V3.1 重点：把 L0 与 M1-M7 的功能、目录、接口、交付物和禁止修改范围落实到唯一责任人，并增加低冲突合并流程。
 
 ---
 
@@ -13,7 +14,7 @@
 每一名成员开始编码前，必须把本文完整提供给自己的编码 AI，并追加一句：
 
 ```text
-我是成员 Mx，只实现本文“人员分工”中分配给 Mx 的模块。先读取接口契约、状态机、目录所有权和验收标准，再输出本次实施计划。不得修改未分配目录，不得自行新增或更名接口；若契约不足，先提交 CONTRACT-CHANGE 提案，等待组长合并契约后再编码。
+我是成员 Mx，只实现本文“人员分工”中分配给 Mx 的模块。先读取接口契约、状态机、目录所有权和验收标准，再输出本次实施计划。不得修改未分配目录，不得自行新增或更名接口；若契约不足，先提交 CONTRACT-CHANGE；若需要公共文件、公共组件或依赖，先提交 BOUNDARY-CHANGE/DEPENDENCY-CHANGE，等待唯一所有者的前置 PR 合并后再编码。
 ```
 
 编码 AI 的固定工作顺序：
@@ -92,21 +93,21 @@
 
 ### 2.3 页面级“不得缺失”矩阵
 
-| 路由/区域 | 必须完整实现的交互 |
-|---|---|
-| `/login` | 登录、密码可见性、表单校验、忘记密码、会话刷新、退出后失效 |
-| 全局布局 | 投标/评标切换、响应式侧栏、Ctrl/Cmd+K 全局搜索、通知已读、账号菜单、退出 |
-| `/dashboard` | 统计下钻、关键词/负责人/状态/我的/临期/风险筛选、重置、CSV 导出、表格/看板、复制任务、归档、发起评标 |
-| `/tasks/create` | 项目信息、招标文件续传、格式校验、解析进度、解析失败重试、解析结果确认、创建任务 |
-| `/tasks/:id` | 七步进度、关联评标、材料 CRUD/上传/模板/导出、AI 审核及建议动作、Word 生成、版本下载/比较/回滚、招标要求查看 |
-| `/admin/qualifications` | 搜索/分类/状态筛选、动态有效期、来源/发证机构/版本、上传/编辑/更新/预览/下载、批量导入、30/60/90 天提醒 |
-| `/admin/fragments` | 关键词/语义搜索、分类、匹配度与理由、来源/版本、上传/编辑/预览/引用、版本历史、引用统计 |
-| `/admin/users` | 搜索、角色/部门/状态筛选、邀请/编辑、项目下钻、密码重置邮件、启停确认、活动日志、RBAC 矩阵 |
-| `/admin/settings` | 模型服务商、脱敏密钥更新、连接测试、场景路由、生成参数、智能体状态、部署/存储、备份、文档模板、通知事件、操作日志导出 |
-| `/evaluation` | 统计下钻、搜索/负责人/状态筛选、表格/看板、相对截止时间、风险明细、创建任务、外部门户入口 |
-| `/evaluation/create` | 投标项目导入、五步向导、自动/手动草稿、恢复、日期关系校验、材料/权重/供应商/评审人校验、发布预览、发布确认 |
-| `/evaluation/:id` | 六步进度、供应商提交、独立邀请链接、补材料通知、多轮报价、资格审查、废标人工确认、技术/商务人工复审、综合排名、报告、关闭、审计导出 |
-| `/evaluation/portal/:inviteCode` | 邀请码交换、供应商锁定、项目与倒计时、材料草稿/上传/替换/正式提交/回执、补材料、多轮报价、提交记录、结束页 |
+| 路由/区域 | 前端 DRI | 后端 DRI | 必须完整实现的交互 |
+|---|---|---|---|
+| `/login` | M3 | M4 | 登录、密码可见性、表单校验、忘记密码、会话刷新、退出后失效 |
+| 全局布局 | M3 | M4 | 投标/评标切换、响应式侧栏、Ctrl/Cmd+K 全局搜索、通知已读、账号菜单、退出 |
+| `/dashboard` | M1 | M5 | 统计下钻、关键词/负责人/状态/我的/临期/风险筛选、重置、CSV 导出、表格/看板、复制任务、归档、发起评标 |
+| `/tasks/create` | M1 | M5 | 项目信息、招标文件续传、格式校验、解析进度、解析失败重试、解析结果确认、创建任务 |
+| `/tasks/:id` | M1 | M5 | 七步进度、关联评标、材料 CRUD/上传/模板/导出、AI 审核及建议动作、Word 生成、版本下载/比较/回滚、招标要求查看 |
+| `/admin/qualifications` | M3 | M5 | 搜索/分类/状态筛选、动态有效期、来源/发证机构/版本、上传/编辑/更新/预览/下载、批量导入、30/60/90 天提醒 |
+| `/admin/fragments` | M3 | M5 | 关键词/语义搜索、分类、匹配度与理由、来源/版本、上传/编辑/预览/引用、版本历史、引用统计 |
+| `/admin/users` | M3 | M4 | 搜索、角色/部门/状态筛选、邀请/编辑、项目下钻、密码重置邮件、启停确认、活动日志、RBAC 矩阵 |
+| `/admin/settings` | M3 | M4 | 模型服务商、脱敏密钥更新、连接测试、场景路由、生成参数、智能体状态、部署/存储、备份、文档模板、通知事件、操作日志导出 |
+| `/evaluation` | M2 | M6 | 统计下钻、搜索/负责人/状态筛选、表格/看板、相对截止时间、风险明细、创建任务、外部门户入口 |
+| `/evaluation/create` | M2 | M6 | 投标项目导入、五步向导、自动/手动草稿、恢复、日期关系校验、材料/权重/供应商/评审人校验、发布预览、发布确认 |
+| `/evaluation/:id` | M2 | M6 | 六步进度、供应商提交、独立邀请链接、补材料通知、多轮报价、资格审查、废标人工确认、技术/商务人工复审、综合排名、报告、关闭、审计导出 |
+| `/evaluation/portal/:inviteCode` | M2 | M6 | 邀请码交换、供应商锁定、项目与倒计时、材料草稿/上传/替换/正式提交/回执、补材料、多轮报价、提交记录、结束页 |
 
 ### 2.4 公共功能
 
@@ -244,105 +245,364 @@ cd demo && npm ci && npm run dev -- --port 3210
 
 ---
 
-## 5. 八人小组任务拆分
+## 5. 八人小组任务拆分（功能板块与唯一所有权）
 
-### 5.1 角色总览
+### 5.1 固定成员编号与责任总览
 
-| 编号 | 角色 | 独占范围 | 核心交付 |
+成员编号在项目周期内不得交换。每项需求只能有一个最终责任人（DRI）；“协助”不等于可以直接修改对方目录。组员跨板块协作必须通过第 5.4 节定义的接口或交付物完成。
+
+| 编号 | 功能板块 | 必须交付的业务终态 | 独占实现范围 | 主要联调对象 |
+|---|---|---|---|---|
+| L0 | 组长、架构与集成 | 契约、环境、CI、迁移、生成代码、集成发布全部可复现 | 根配置、`contracts/`、`infra/`、`scripts/`、CI、中央注册文件、迁移版本 | 全员 |
+| M1 | 投标中心前端 | 投标工作台和七步投标闭环全部可操作 | 投标三个页面、`demo/src/features/bids/` | M5、M3、M4、M7 |
+| M2 | 评标中心与供应商门户前端 | 评标六步闭环和外部门户全部可操作 | 评标四个页面、`demo/src/features/evaluations/`、`portal/` | M6、M3、M4、M7 |
+| M3 | 公共、管理端与资源库前端 | 登录、布局、搜索、通知、资质、片段、用户、设置完整 | 前端应用壳、公共组件、唯一 API 包装、管理与资源库页面 | M4、M5、M1、M2 |
+| M4 | 公共平台后端 | 认证、RBAC、文件、任务元数据、通知、设置、审计、健康检查完整 | `core` 及平台公共领域 | M3、M5、M6、M7 |
+| M5 | 投标与资源库后端 | 投标任务、材料、审核编排、文档版本、资质和片段接口完整 | `bids`、`qualifications`、`fragments`、`documents` | M1、M4、M7、M6 |
+| M6 | 评标与门户后端 | 评标、供应商、补材料、报价、评分、排名、报告、关闭完整 | `evaluations`、`portal`、`pricing`、`scoring` | M2、M4、M7、M5 |
+| M7 | AI、异步执行与质量 | AI 工作流、队列执行、降级、质量评估和跨域 E2E 完整 | `ai`、`workers`、`e2e` | M4、M5、M6、M1、M2、M3 |
+
+### 5.2 每人功能任务卡
+
+#### L0 组长：架构、契约、环境与发布
+
+**负责功能**：
+
+- 固化目录骨架、运行环境、Compose、数据库基线、CI、演示种子和一键启动脚本。
+- 维护本文、`contracts/openapi.yaml`、事件 Schema、接口示例和所有错误码/枚举；口头约定无效。
+- 根据锁定契约生成前端 SDK 和后端契约模型，确保生成结果来自同一个契约提交。
+- 审核并生成 Alembic 单一迁移链；维护 `main`、`develop`、版本标签、发布说明和答辩脚本。
+- 定义固定聚合协议：M3 建立前端路由聚合器；L0 建立后端 Router 聚合器和模型注册器。成员只导出自己的领域模块，禁止多人反复编辑中央文件。
+
+**独占文件**：
+
+- `PROJECT_MASTER_PROMPT.md`、`contracts/**`、`infra/**`、`scripts/**`、`.github/**`。
+- `.env.example`、`.nvmrc`、`.python-version`、根目录工程配置。
+- `demo/package.json`、`demo/package-lock.json`、Vite/TypeScript/Tailwind/PostCSS 配置。
+- `backend/pyproject.toml`、`uv.lock`、`alembic.ini`、`backend/migrations/versions/**`。
+- `backend/app/main.py`、`backend/app/api/v1/router.py`、中央模型注册文件。
+- `demo/src/api/generated/**`、`backend/app/contracts/generated/**` 等全部生成代码。
+
+**不得代替成员完成**：不得在没有契约变更记录的情况下临时增加接口，也不得直接接管 M1-M7 的领域文件来“快速修复”。需要跨域修复时指定领域所有者提交 PR。
+
+**验收**：从空数据库执行一次命令即可启动；契约检查、单迁移头、全量 CI 和关键 E2E 全绿；`main` 始终可演示。
+
+#### M1：投标中心前端
+
+**负责路由**：`/dashboard`、`/tasks/create`、`/tasks/:id`。
+
+**负责功能**：
+
+- 投标工作台：统计卡片下钻、列表/看板切换、关键字与组合筛选、分页、负责人筛选、CSV 导出、任务进入、克隆、归档和发起评标入口。
+- 新建投标：项目信息校验、招标文件上传/续传、文件类型与大小提示、草稿保存、创建成功跳转。
+- 投标七步详情：文件解析进度、需求确认、材料清单 CRUD、资质/片段匹配、文件绑定、批量处理、AI 审核、人工处理意见、文档生成、下载、版本比较和回滚。
+- 展示所有 Loading、Empty、Error、Forbidden、超时、任务失败、版本冲突和操作确认状态；不得只实现成功路径。
+
+**独占文件**：`Dashboard.tsx`、`BidCreate.tsx`、`TaskDetail.tsx`、`demo/src/features/bids/**` 及其中的组件、hooks、适配器、领域测试和 fixtures。
+
+**接口边界**：只通过生成 SDK 消费第 8.2 节投标接口、第 8.3 节只读资源库接口及第 8.6 节文件/任务/实时接口。需要新增字段时向 L0 提交契约变更，不得在页面内手写临时 DTO 或直接 `fetch`。
+
+**交付与验收**：投标组件/集成测试由 M1 编写；向 M7 提供投标主流程、失败流和权限流验收清单。M5 的契约测试通过后，M1 的页面不得再依赖业务 Mock。
+
+**禁止修改**：评标页面、公共布局、`App.tsx`、全局 CSS、公共 API Client、生成 SDK、依赖清单。
+
+#### M2：评标中心与供应商门户前端
+
+**负责路由**：`/evaluation`、`/evaluation/create`、`/evaluation/:id`、`/evaluation/portal/:inviteCode`。
+
+**负责功能**：
+
+- 评标工作台：统计、筛选、列表、任务进入、供应商链接入口和从投标项目导入。
+- 创建评标：草稿、投标数据导入、材料配置、评分标准、评审设置、评委、供应商、五项发布前校验、预览和发布结果。
+- 评标六步详情：供应商材料、补材料通知、多轮报价、价格对比、资格/完整性检查、废标风险人工确认、AI/人工评分、排名、报告、关闭和审计轨迹。
+- 供应商 Portal：邀请码交换会话、身份锁定、材料草稿、正式提交与回执、补材料、报价、通知、过期/撤销/关闭/无权限独立页面。
+- Portal 与内部系统必须使用不同会话；页面不得在 URL、日志或本地存储中暴露长期 Token。
+
+**独占文件**：四个评标/Portal 页面、`demo/src/features/evaluations/**`、`demo/src/features/portal/**` 及其中的组件、hooks、适配器、领域测试和 fixtures。
+
+**接口边界**：只消费第 8.4、8.5 节接口及第 8.6 节文件/任务/实时接口。不得直接读取投标前端状态；从投标创建评标只能调用 M6 提供的接口。
+
+**交付与验收**：评标与 Portal 组件/集成测试由 M2 编写；向 M7 提供内部评标、供应商提交、链接失效和截止时间四类验收清单。M6 契约测试通过后不得依赖业务 Mock。
+
+**禁止修改**：投标页面、公共布局、内部认证实现、生成 SDK、依赖清单和后端 Portal Token 逻辑。
+
+#### M3：公共前端、管理端与资源库前端
+
+**负责路由**：登录页、`/admin/qualifications`、`/admin/fragments`、`/admin/users`、`/admin/settings`，以及全局 404/403/500 页面。
+
+**负责功能**：
+
+- 应用壳：认证恢复、路由守卫、MainLayout、菜单、面包屑、用户菜单、全局搜索、通知中心、响应式和错误边界。
+- 唯一前端网络层：Base URL、Token 刷新、Request ID、错误码映射、取消请求、版本冲突处理；业务页面只能调用该包装后的生成 SDK。
+- 公共组件：Loading、Empty、Error、Forbidden、Confirm、Upload、FilePreview、JobProgress、PermissionGate、分页与筛选容器。
+- 资质库：增删改查、来源、状态、有效期、到期提醒、文件下载、导入模板、版本记录。
+- 片段库：增删改查、语义搜索、分类、来源、版本、引用记录和使用次数。
+- 用户与权限：邀请、重发、启停、角色矩阵、项目记录、活动记录和密码重置邮件。
+- 系统设置：模型服务商、场景路由、生成参数、部署、文档模板、通知、智能体状态、连接测试和未保存状态。
+
+**独占文件**：`App.tsx`、`main.tsx`、`MainLayout.tsx`、`Login.tsx`、四个管理/资源库页面、`demo/src/app/**`、`demo/src/layouts/**`、`demo/src/components/common/**`、`demo/src/api/client.ts`、`demo/src/api/interceptors.ts`、`demo/src/features/admin/**`、`demo/src/features/libraries/**`、`demo/src/index.css`。
+
+**低冲突路由规则**：M3 在 Phase 0 一次性让 `App.tsx` 聚合 `bidRoutes`、`evaluationRoutes`、`adminRoutes`。之后 M1/M2 只改各自 `features/*/routes.tsx`，不再修改 `App.tsx`；导航项同理通过各领域 `navigation.ts` 导出。
+
+**接口边界**：消费第 8.1、8.3、8.7 节和第 8.6 节公共接口。资质/片段后端问题交给 M5，其余公共平台问题交给 M4。
+
+**交付与验收**：公共组件测试、网络错误状态测试、管理端集成测试和无障碍扫描由 M3 编写；M1/M2 提出公共组件需求时，M3 先以独立 PR 交付公共组件。
+
+**禁止修改**：投标/评标领域组件、生成 SDK、OpenAPI、依赖清单和后端代码。
+
+#### M4：公共平台后端
+
+**负责领域**：`auth`、`users`、`files`、`jobs`、`notifications`、`settings`、`audit`、`search`、`health` 及 `backend/app/core/**`。
+
+**负责功能**：
+
+- 内部认证：登录、Access/Refresh Token 轮换、退出、个人资料、忘记/重置密码、租户隔离、RBAC 和资源级鉴权依赖。
+- 用户平台：邀请、重发、启停、角色/权限、项目与活动查询。
+- 文件平台：上传会话、分片、合并、SHA-256、病毒扫描、MinIO、预览/下载签名地址和资源访问控制。
+- 异步任务平台：`Job` 元数据、状态查询、取消、进度持久化和一次性 WebSocket Ticket；M4 不实现具体 AI 算法。
+- 通知、全局搜索、设置、密钥加密、模型连接测试入口、全局审计、健康与依赖检查。
+
+**独占文件**：`backend/app/core/**`、上述平台领域目录及对应的后端单元/接口测试。中央 `main.py` 和总 Router 仍归 L0。
+
+**必须提供的端口（代码接口）**：`AuthContext`、`FileService`、`JobService/JobDispatcher`、`NotificationService`、`AuditService`、`SettingsService`。M5/M6/M7 只能经这些端口使用平台能力，不得直连 MinIO、Redis、SMTP 或密钥表。
+
+**接口边界**：负责第 8.1、8.6、8.7 节 HTTP 接口和 OpenAPI 实现；M7 只实现 Job 后面的 Worker 执行器与 Provider 适配器。
+
+**交付与验收**：平台领域单元/接口/权限/租户隔离测试；文件越权、Refresh 重放、任务取消、密钥脱敏和健康降级必须有失败流测试。
+
+**禁止修改**：投标/评标业务表和规则、AI 工作流、中央 Router、迁移版本文件、契约文件。
+
+#### M5：投标与资源库后端
+
+**负责领域**：`bids`、`qualifications`、`fragments`、`documents`。
+
+**负责功能**：
+
+- 投标任务：CRUD、筛选/统计/看板、分配、克隆、归档、招标文件绑定和第 9.1 节状态机。
+- 招标解析结果与需求确认、材料清单 CRUD、资源库匹配、文件绑定、批量绑定、模板和导出。
+- 投标审核任务编排、审核结果/人工决定、Word 生成任务编排、文档元数据、版本哈希、比较和“回滚为新版本”。
+- 资质库和片段库完整 CRUD、导入/导出、版本、来源、有效期、语义搜索入口和引用记录。
+- 向 M6 提供只读 `BidTaskSnapshotPort`，用于“从投标创建评标”；M6 不得直接查询投标 ORM 表。
+
+**独占文件**：四个投标/资源库领域目录、领域模型、repository、service、router 和对应后端单元/接口测试。
+
+**接口边界**：负责第 8.2、8.3 节实现。文件操作调用 M4 `FileService`；解析、匹配、审核和生成通过 M4 `JobDispatcher` 调度 M7；不得在请求线程直接调用模型。
+
+**交付与验收**：每个状态迁移、幂等动作、版本冲突、越权和异步失败均有测试；接口返回必须与生成契约完全一致。
+
+**禁止修改**：评标 ORM/服务、公共平台实现、AI Provider、迁移版本、OpenAPI 和前端文件。
+
+#### M6：评标与供应商门户后端
+
+**负责领域**：`evaluations`、`portal`、`pricing`、`scoring`。
+
+**负责功能**：
+
+- 评标草稿、从投标快照导入、材料/标准/设置/评委/供应商配置、验证、预览、发布、取消和第 9.2 节状态机。
+- 供应商邀请：短期交换码、会话刷新、撤销、轮换、身份隔离、截止时间和防重放。
+- Portal 材料草稿/删除/正式提交/回执、补材料通知与响应、多轮报价和价格比较。
+- 材料完整性、废标风险任务编排与人工决定、AI/人工评分、确认、排名、报告元数据、关闭和评标域审计事件。
+- 只通过 M5 `BidTaskSnapshotPort` 获取投标快照；只通过 M4 平台端口处理文件、通知、任务和审计。
+
+**独占文件**：四个评标/Portal 领域目录、领域模型、repository、service、router 和对应后端单元/接口测试。
+
+**接口边界**：负责第 8.4、8.5 节实现。AI 检查、评分和报告通过 `JobDispatcher` 调度 M7；正式提交、报价、发布、关闭必须幂等。
+
+**交付与验收**：跨供应商数据隔离、截止边界、邀请码重放、重复提交、Decimal 金额、人工改分留痕和 append-only 审计必须有测试。
+
+**禁止修改**：投标 ORM/服务、内部认证、公共文件实现、AI Provider、迁移版本、OpenAPI 和前端文件。
+
+#### M7：AI、Worker 与跨域质量
+
+**负责功能**：
+
+- LangGraph 工作流：招标解析、需求提取、材料生成、语义匹配、四类投标审核、材料完整性、废标风险、AI 评分和评标报告。
+- Provider 适配：阿里云百炼、DeepSeek、智谱 AI、Fake Provider、路由、超时、重试、熔断、降级、Token/费用/延迟指标；密钥只从 M4 `SettingsService` 获取脱敏后的运行凭据句柄。
+- Celery Worker：任务注册、进度、取消、重试、幂等、死信/人工处理；通过 M4 `JobService` 报告状态。
+- Pydantic 结构化输出校验、提示词版本、离线固定样本、质量指标和回归评估。
+- Playwright E2E：投标、评标、Portal、管理端主流程和关键错误流；M7 是 `e2e/**` 唯一编辑人。
+
+**独占文件**：`backend/app/ai/**`、`backend/app/workers/**`、`backend/tests/ai/**`、`e2e/**` 及 AI 固定样本。
+
+**回写边界**：M7 不直接写任何业务表，不导入 M5/M6 repository。Worker 输出经已锁定的 `JobResult` Schema 返回，由 M5/M6 的领域 service 校验业务状态后落库。
+
+**交付与验收**：Fake Provider 下 CI 结果确定；结构校验失败、Provider 超时、重试耗尽、取消和降级均有测试；真实 Key 仅用于手工受控测试且不得进入日志或仓库。
+
+**禁止修改**：HTTP 业务 Router、投标/评标业务表、平台密钥存储、前端业务实现、迁移版本和 OpenAPI。
+
+### 5.3 目录与文件唯一所有权表
+
+| 路径或文件类型 | 唯一编辑人 | 其他成员的使用方式 |
+|---|---|---|
+| `contracts/**`、`PROJECT_MASTER_PROMPT.md` | L0 | 提 Issue/PR 建议，不直接修改 |
+| 根环境、Compose、CI、脚本、依赖清单及所有 lock 文件 | L0 | 提 `DEPENDENCY-CHANGE` 或 `ENV-CHANGE` 请求 |
+| 前后端生成代码 | L0 | 只导入使用，禁止手改 |
+| Alembic `versions/**`、中央 Router/模型注册器 | L0 | 提迁移说明或导出领域 Router |
+| `App.tsx`、布局、公共组件、全局样式、唯一 API 包装 | M3 | M1/M2 通过导出 API 使用 |
+| 投标页面与 `features/bids/**` | M1 | 其他人只通过路由和公开组件使用 |
+| 评标/Portal 页面与对应 features | M2 | 其他人只通过路由和公开组件使用 |
+| `backend/app/core/**` 与平台公共领域 | M4 | M5/M6/M7 通过 Protocol/Service 端口调用 |
+| 投标、资质、片段、文档领域 | M5 | M1 调 HTTP；M6 调 `BidTaskSnapshotPort` |
+| 评标、Portal、报价、评分领域 | M6 | M2 调 HTTP；其他后端通过明确端口调用 |
+| AI、Worker、跨域 E2E | M7 | 领域后端通过 Job Schema 调用；组员提交验收清单 |
+| `demo/src/mock/**` 旧公共 Mock | M3 | Phase 1 后删除；领域临时 fixture 放各自目录 |
+
+同一文件始终只有一个所有者。即使只是“一行修改”，非所有者也不得顺手提交；应由所有者先合并独立前置 PR，消费者随后更新自己的分支。
+
+### 5.4 跨成员交付接口
+
+| 提供者 | 稳定交付物 | 使用者 | 禁止的替代做法 |
 |---|---|---|---|
-| L0 | 组长 | 契约、迁移主链、Compose、CI、集成与发布 | 架构决策、接口合并、数据库审查、联调、版本发布 |
-| M1 | 投标前端 | `demo/src/pages/Dashboard.tsx`、`BidCreate.tsx`、`TaskDetail.tsx`、投标 feature | 投标七步、列表/看板、上传、审核、输出、版本 UI |
-| M2 | 评标前端 | `EvaluationDashboard.tsx`、`EvaluationCreate.tsx`、`EvaluationTaskDetail.tsx`、`SupplierPortal.tsx` | 评标六步、外部门户、评分、报价、审计 UI |
-| M3 | 管理与公共前端 | `MainLayout.tsx`、Login、Qualification、Fragment、User、Settings、前端 API 适配层 | 登录/导航/通知/库管理/权限/设置/错误与状态组件 |
-| M4 | 平台后端 | `backend/app/domains/auth`、`users`、`files`、`notifications`、`settings` | JWT、RBAC、用户、统一文件、通知、配置、全局审计 |
-| M5 | 投标后端 | `backend/app/domains/bids`、`qualifications`、`fragments`、`documents` | 投标任务、材料、资源库、审核编排接口、Word/版本服务 |
-| M6 | 评标后端 | `backend/app/domains/evaluations`、`portal`、`pricing`、`scoring` | 评标任务、供应商、报价、补材料、评分、排名、关闭、审计 |
-| M7 | AI 与质量 | `backend/app/ai`、`backend/app/workers`、`e2e/`、AI 测试数据 | 解析、匹配、审核、评分、报告、模型降级、异步任务、关键 E2E |
+| L0 | OpenAPI、事件 Schema、生成 SDK、环境与迁移 | 全员 | 群聊口头字段、手写重复 DTO |
+| M3 | 公共组件、路由壳、API Client、错误映射 | M1/M2 | 各页面复制 Upload/JobProgress 或自己刷新 Token |
+| M4 | Auth/File/Job/Notification/Audit/Settings 服务端口 | M5/M6/M7 | 业务域直连基础设施或复制鉴权代码 |
+| M5 | 投标 HTTP API、`BidTaskSnapshotPort`、AI 任务输入 Schema | M1/M6/M7 | 跨域直接查询投标表 |
+| M6 | 评标/Portal HTTP API、AI 任务输入 Schema | M2/M7 | 前端直接拼接状态或绕过 Portal 会话 |
+| M7 | Worker 任务名、结构化 Job 结果、E2E 证据 | M4/M5/M6/L0 | Worker 直接写业务表或业务域解析自由文本 |
+| M1/M2/M3 | 页面验收清单和稳定选择器 `data-testid` | M7 | 多人同时编辑同一个 E2E 文件 |
 
-### 5.2 每人详细任务与验收
+默认结对审查关系：M1↔M5、M2↔M6、M3↔M4；M7 审查所有异步/AI/E2E 变更；L0 审查契约、共享文件、迁移、环境和跨域变更。
 
-#### L0 组长
+### 5.5 跨边界变更申请
 
-- 维护 `PROJECT_MASTER_PROMPT.md`、`contracts/*`、根环境文件、Compose、CI 和迁移编号。
-- 建立 `main`、`develop` 保护规则；所有 PR 至少一人审查，接口/迁移 PR 必须由组长审查。
-- 每日合并契约和生成客户端，主持接口联调；禁止亲自绕过契约做临时接口。
-- 维护集成环境、种子数据、演示账号、版本标签和最终答辩脚本。
-- 验收：全量 CI 通过、所有页面无死按钮、关键 E2E 全绿、可从空数据库一键启动。
-
-#### M1 投标前端
-
-- 将现有投标 Demo 状态逐步替换为生成 API 客户端；不得改动评标页面。
-- 完成上传续传、解析进度、材料 CRUD/匹配/上传、审核建议、文档生成与版本操作。
-- 完成列表筛选、统计下钻、CSV 导出、空/错/权限状态和响应式。
-- 测试：投标组件测试 + `bid-flow.spec.ts`。
-
-#### M2 评标前端
-
-- 完成任务导入、草稿、五步校验、发布、供应商链接、门户身份锁定。
-- 完成补材料、多轮报价、资格审查、废标确认、AI/人工评分、排名、报告、关闭和审计。
-- Portal 不得复用内部 JWT；过期、撤销、关闭必须有独立页面。
-- 测试：评标组件测试 + `evaluation-flow.spec.ts` + `supplier-portal.spec.ts`。
-
-#### M3 管理与公共前端
-
-- 完成认证会话、全局错误边界、生成客户端包装、搜索、通知、响应式布局。
-- 完成资质来源/版本/提醒、片段语义搜索/版本、用户 RBAC、全部系统设置。
-- 建立复用的 Loading/Empty/Error/Forbidden/Confirm/Upload/JobProgress 组件。
-- 测试：`admin-flow.spec.ts`、无障碍扫描和前端错误状态测试。
-
-#### M4 平台后端
-
-- 实现认证、Token 轮换、密码重置、用户邀请/启停、RBAC、租户隔离。
-- 实现统一文件上传会话、分片、哈希、病毒扫描、MinIO 和附件权限。
-- 实现站内/邮件通知、一次性 WebSocket Ticket、系统设置、密钥加密和连接测试。
-- 所有模块提供依赖注入接口，禁止业务模块绕过文件/通知服务直连 MinIO/SMTP。
-
-#### M5 投标后端
-
-- 实现投标任务状态机、招标文件挂载、材料清单、库匹配、资源库、分配和导出。
-- 对接 M7 异步解析/审核/生成任务，持久化进度和结果。
-- 实现文档版本哈希、比较、回滚为新版本，禁止覆盖历史文件。
-- 负责投标域数据库模型、服务测试和接口测试。
-
-#### M6 评标后端
-
-- 实现评标草稿/导入/验证/发布状态机；独立供应商邀请码的生成、交换、撤销和轮换。
-- 实现供应商材料草稿/正式提交/回执、补材料、多轮报价和并发幂等。
-- 实现废标人工确认、评分调整、排名、报告元数据、关闭和 append-only 审计。
-- 负责评标域数据库模型、状态迁移测试和接口测试。
-
-#### M7 AI 与质量
-
-- LangGraph 节点：解析、需求提取、材料生成、语义匹配、四类投标审核、完整性、废标风险、评分、报告。
-- 所有 AI 输出必须用 Pydantic Schema 校验；失败进入重试/降级/人工处理，不得把未校验文本写入业务表。
-- 建立离线固定样本和评估指标；AI 测试默认使用 Fake Provider，真实 Key 仅在手工受控测试使用。
-- 维护 Celery 进度、取消、重试、幂等；编写三条核心 E2E 和错误流测试。
-
-### 5.3 避免冲突的文件所有权
-
-- 同一 PR 不得同时大改前端公共布局和领域页面。
-- M1/M2 需要公共组件时向 M3 提交需求；M3 合并组件后再引用。
-- M5/M6 需要平台能力时依赖 M4 的接口，不得复制认证、文件或通知代码。
-- M7 不直接写业务表，通过 M5/M6 提供的 repository/service 接口回写结果。
-- Alembic revision 由成员生成后交 L0 重新编号/合并，任何人不得自行解决双 head 后直接推送。
+1. 发起 `BOUNDARY-CHANGE` Issue，写清业务原因、目标文件、当前所有者、接口变化、受影响成员和回滚方式。
+2. 文件所有者决定是否接受；接受后由所有者创建独立前置 PR，禁止把共享修改混在调用方业务 PR 中。
+3. 前置 PR 合入 `develop` 后，调用方同步 `develop`，再只修改自己的领域文件。
+4. 紧急情况下仍不得多人共同编辑；L0 可以临时重新指定唯一所有者，并在 Issue 和 PR 中留下书面记录。
+5. 未经所有者和 L0 同意的越界文件会在 PR 审查中直接退回，不通过“先合并再修复”。
 
 ---
 
-## 6. Git 与合并流程
+## 6. Git 与低冲突合并流程
 
-- 长期分支：`main`（稳定演示）、`develop`（集成）。禁止直接提交。
-- 成员分支：`feat/m1-bid-web-*`、`feat/m2-eval-web-*`、`feat/m3-admin-web-*`、`feat/m4-platform-api-*`、`feat/m5-bid-api-*`、`feat/m6-eval-api-*`、`feat/m7-ai-qa-*`。
-- 修复分支：`fix/mX-issue-number-description`；契约提案：`contract/issue-number-description`。
-- Commit 使用 Conventional Commits：`feat(bid): ...`、`fix(portal): ...`、`test(e2e): ...`、`docs(contract): ...`。
-- 禁止提交生成物 `node_modules/`、`dist/`、`.venv/`、真实 `.env`、上传文件和数据库卷。
-- 接口变更顺序严格为：
-  1. CONTRACT-CHANGE Issue；
-  2. 修改 OpenAPI + 示例 + 契约测试；
-  3. L0 合并并生成客户端；
-  4. 后端实现；
-  5. 前端接入；
-  6. E2E 验证。
-- PR 合并门禁：format、lint、typecheck、unit、API test、OpenAPI breaking check、migration check、critical E2E、secret scan 全部通过。
+### 6.1 分支模型
+
+- `main`：始终可演示，只接收 L0 从 `develop` 发起的阶段发布 PR。
+- `develop`：唯一集成分支，只接收通过门禁的成员 PR；任何人不得直接 push。
+- 功能分支必须从最新 `origin/develop` 创建，不得从另一名成员的功能分支继续开发。
+- 一项工作一个短分支、一个 PR，目标在 1-2 个工作日内合并，避免长期分支积累大量冲突。
+- 分支命名：
+  - `feat/m1-bid-web-<issue>-<short-name>`
+  - `feat/m2-eval-web-<issue>-<short-name>`
+  - `feat/m3-platform-web-<issue>-<short-name>`
+  - `feat/m4-platform-api-<issue>-<short-name>`
+  - `feat/m5-bid-api-<issue>-<short-name>`
+  - `feat/m6-eval-api-<issue>-<short-name>`
+  - `feat/m7-ai-qa-<issue>-<short-name>`
+  - 修复：`fix/mX-<issue>-<short-name>`；契约提案：`contract/<issue>-<short-name>`。
+  - L0 文档/流程：`docs/l0-<short-name>`；L0 环境/集成：`chore/l0-<short-name>`。
+- Commit 使用 Conventional Commits，并带领域：`feat(bid): ...`、`fix(portal): ...`、`test(e2e): ...`、`docs(contract): ...`。
+
+### 6.2 开始开发与同步基线
+
+创建分支前执行：
+
+```bash
+git fetch origin
+git switch develop
+git pull --ff-only origin develop
+git switch -c feat/mX-domain-issue-short-name
+```
+
+提交 PR 前必须把最新 `develop` 合入自己的分支并在本地解决冲突：
+
+```bash
+git fetch origin
+git switch <自己的功能分支>
+git merge origin/develop
+```
+
+- 只能解决自己独占目录中的冲突。如果冲突出现在共享/他人文件，立即执行 `git merge --abort`，把冲突文件清单发给文件所有者和 L0，由唯一所有者准备前置修复 PR。
+- 禁止对 `main`、`develop` 使用 force push；本流程不要求成员 rebase 已公开分支，避免误覆盖他人提交。
+- 每天开始工作先同步一次；发现基线已变更时先同步再继续，禁止在旧契约上连续开发数日。
+
+### 6.3 PR 原子性、大小和审查人
+
+- 一个 PR 只完成一个可描述、可测试、可回滚的功能，不混入无关格式化、依赖升级、文件移动或跨领域重构。
+- 普通 PR 建议不超过 15 个手写文件或 500 行手写差异；超过时必须拆成前置基础 PR 与业务 PR，或由 L0 在 PR 中批准例外。
+- PR 描述必须列出：Issue、责任成员、功能范围、修改路径、接口版本/提交 SHA、数据库影响、测试命令、截图或接口证据、回滚方式。
+- 作者先执行 `git diff --name-only origin/develop...HEAD`，确认所有文件都在自己的独占范围；越界文件必须拆出。
+- 默认审查人：M1↔M5、M2↔M6、M3↔M4；异步/AI 由 M7 审查；共享/契约/迁移/环境由 L0 审查。
+- PR 合并方式固定为 Squash merge；标题必须能直接作为发布日志。合并后删除功能分支，下一项任务重新从 `develop` 建分支。
+
+### 6.4 接口契约变更顺序
+
+任何接口路径、方法、字段、枚举、状态、错误码或事件变化都必须按以下顺序执行，禁止前后端并行猜字段：
+
+1. 责任人创建 `CONTRACT-CHANGE` Issue，写出旧结构、新结构、兼容性、使用页面、后端领域和迁移策略。
+2. L0 修改 `contracts/openapi.yaml`、事件 Schema、示例、本文第 7-11 节和契约测试；其他成员不直接编辑。
+3. 契约 PR 单独合入 `develop`，L0 在独立提交中重新生成前端 SDK 与后端契约模型。
+4. 后端所有者在新契约上实现并通过 API/契约测试；不允许先返回临时字段。
+5. 前端所有者同步 `develop` 后接入生成 SDK；不得保留重复手写 DTO。
+6. M7 最后补齐 E2E/错误流，L0 验证 OpenAPI 无破坏性漂移后关闭 Issue。
+
+兼容规则：能新增可选字段时不得直接重命名/删除旧字段；确需破坏性变更时使用新端点或明确的版本迁移窗口。群聊截图、口头说明和前端 TypeScript 类型都不是契约来源。
+
+### 6.5 依赖、锁文件与生成代码
+
+- 只有 L0 可以修改 `package.json`、`package-lock.json`、`pyproject.toml`、`uv.lock` 及构建工具配置。
+- 成员需要依赖时创建 `DEPENDENCY-CHANGE` Issue，说明用途、现有替代方案、许可证、体积和安全影响；L0 用独立 PR 安装并更新锁文件。
+- 禁止成员删除锁文件、改用另一包管理器、手工合并 lock 冲突或把个人环境解析出的锁文件带入业务 PR。
+- 只有 L0 可以运行契约代码生成并提交 `generated/**`。生成文件冲突时不手工选 `ours/theirs`；L0 以已合并契约重新生成。
+- 禁止提交 `node_modules/`、`dist/`、`.venv/`、真实 `.env`、上传文件、数据库卷、IDE 缓存和本机绝对路径配置。
+
+### 6.6 数据模型与 Alembic 迁移
+
+- M4/M5/M6 只修改自己领域内的 ORM 模型；同一张表只能归一个领域所有者，其他领域通过 ID 和 service port 访问。
+- 后端成员在业务 PR 描述中提交 `MIGRATION-NOTE`：表/列/索引变化、数据回填、兼容期、upgrade、downgrade 和数据风险，但不得提交 `versions/**`。
+- L0 按 M4→M5→M6 的合并队列顺序接收模型变化，每合并一组后从最新 `develop` 生成一个迁移 PR。
+- CI 必须验证 `alembic heads` 只有一个 head，并执行空库 `upgrade head` 及 `upgrade -> downgrade -> upgrade` 循环。
+- 禁止成员自行重编号 revision、修改已进入 `develop` 的历史迁移、创建 merge revision 掩盖双 head，或跨领域顺手改表。
+
+### 6.7 中央注册文件与公共代码
+
+- 前端 `App.tsx` 只由 M3 编辑。M1/M2/M3 分别导出 `bidRoutes`、`evaluationRoutes`、`adminRoutes` 与各自 `navigation`，中央聚合器在 Phase 0 固定导入，后续新增领域页面不改中央文件。
+- 后端每个领域在自身目录导出 `router`；`backend/app/api/v1/router.py` 只由 L0 维护固定 `include_router`，成员不得在中央 Router 中处理业务。
+- ORM 模型由各领域导出，中央模型注册器只由 L0 维护；禁止用跨目录 import 的副作用临时注册模型。
+- 公共前端组件和 API 包装只由 M3 实现；业务成员先提需求，公共 PR 合并后再引用，禁止复制一份稍作修改。
+- 公共后端能力只由 M4 通过 Protocol/Service 端口提供；领域成员不得复制认证、文件、通知、审计、Job 状态代码。
+
+### 6.8 冲突归属与处理矩阵
+
+| 冲突位置 | 唯一处理人 | 处理规则 |
+|---|---|---|
+| M1/M2/M4/M5/M6 各自领域文件 | 对应领域所有者 | 所有者根据双方功能意图整合并补测试 |
+| `App.tsx`、布局、公共组件、API Client、全局样式 | M3 | 业务成员说明调用需求，M3 提交解决方案 |
+| OpenAPI、事件 Schema、生成代码、环境、依赖与 lock | L0 | 以权威契约/锁定版本重新生成，不手工拼接 |
+| 中央 Router、模型注册器、Alembic revision | L0 | 按合并队列在最新 `develop` 上重新生成或注册 |
+| 平台后端端口 | M4 | 保持向后兼容；确需变更走 CONTRACT/BOUNDARY 流程 |
+| AI Workflow、Worker 注册、E2E | M7 | 先确认 Job Schema，再整合任务名和测试选择器 |
+| 不属于任何现有目录的新跨域文件 | L0 指定一名所有者 | 指定前不得创建并并行开发 |
+
+解决冲突时禁止简单选择整文件 `ours` 或 `theirs`，必须逐段核对两个功能是否都保留，并重新运行受影响单元测试、契约测试和 E2E。
+
+### 6.9 固定合并队列与安全并行范围
+
+同一功能纵向切片按以下顺序进入 `develop`：
+
+1. L0：契约、环境或目录骨架。
+2. M3/M4：所需公共前端组件与公共平台端口。
+3. M5/M6：领域后端实现及领域测试。
+4. M7：AI/Worker 实现和 Job 结果验证。
+5. M1/M2/M3：使用稳定接口的页面功能。
+6. M7：跨端 E2E 与错误流。
+7. L0：阶段集成、回归和 `main` 发布。
+
+允许的并行：M1 与 M5、M2 与 M6 可以在契约已合并后分别开发；前端先使用契约示例编写组件测试，但在 Phase 验收前必须接入真实 API。禁止的并行：多人同时改公共组件、契约、锁文件、迁移、中央 Router 或生成代码。
+
+### 6.10 合并门禁清单
+
+每个 PR 在合并前必须同时满足：
+
+- [ ] 修改文件全部属于作者独占范围，或附有已批准的 `BOUNDARY-CHANGE`。
+- [ ] 已同步最新 `origin/develop`，工作区干净且不存在未解决冲突。
+- [ ] format、lint、typecheck、unit、API test 均通过。
+- [ ] 契约变更通过 OpenAPI breaking check，且生成代码由 L0 更新。
+- [ ] 模型变更附 `MIGRATION-NOTE`，迁移检查只有一个 head。
+- [ ] 关键 E2E、权限/错误状态和回归测试按风险通过。
+- [ ] 无真实密钥、个人数据、环境文件、构建产物或超大无关文件。
+- [ ] PR 没有无关格式化、依赖升级或他人领域代码。
+- [ ] 配对审查人和必要的 L0/M7 审查均已批准。
 
 ---
 
@@ -405,6 +665,7 @@ type QualificationStatus = 'valid' | 'expiring' | 'expired' | 'revoked';
 type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 type RiskSeverity = 'info' | 'warning' | 'high' | 'critical';
 type Decision = 'pending' | 'passed' | 'rejected';
+type RealtimeChannel = 'internal' | 'portal';
 ```
 
 ### 7.3 核心 DTO
@@ -727,7 +988,7 @@ interface DependencyHealth { status: 'ok'|'degraded'|'down'; dependencies: Array
 
 下表中的名称必须原样进入 OpenAPI。`Page<T>` 表示 `ApiSuccess<T[]>` 加分页 `meta`；`Binary` 表示二进制响应。
 
-### 8.1 认证、用户与权限（M4）
+### 8.1 认证、用户与权限（后端 M4；前端 M3）
 
 | Method | Path | 请求 | `data` 响应 | 权限 |
 |---|---|---|---|---|
@@ -749,7 +1010,7 @@ interface DependencyHealth { status: 'ok'|'degraded'|'down'; dependencies: Array
 | GET | `/roles` | 无 | `RoleDefinition[]` | admin |
 | GET | `/permissions/matrix` | 无 | `PermissionMatrix` | admin |
 
-### 8.2 投标任务（M5）
+### 8.2 投标任务（后端 M5；前端 M1）
 
 | Method | Path | 请求 | `data` 响应 | 权限 |
 |---|---|---|---|---|
@@ -787,7 +1048,7 @@ interface DependencyHealth { status: 'ok'|'degraded'|'down'; dependencies: Array
 | GET | `/bid-tasks/{taskId}/document-versions/compare` | `fromVersionId,toVersionId` | `DocumentDiff` | assigned |
 | POST | `/bid-tasks/{taskId}/document-versions/{versionId}/rollback` | `{reason}` | `JobRef` | owner/admin |
 
-### 8.3 资质与片段库（M5）
+### 8.3 资质与片段库（后端 M5；前端 M3）
 
 | Method | Path | 请求 | `data` 响应 | 权限 |
 |---|---|---|---|---|
@@ -811,7 +1072,7 @@ interface DependencyHealth { status: 'ok'|'degraded'|'down'; dependencies: Array
 | POST | `/fragments/{id}/references` | `{bidTaskId,materialId?}` | `{referenced:true,useCount}` | assigned |
 | DELETE | `/fragments/{id}` | `{reason}` | 204 | admin |
 
-### 8.4 评标任务、供应商、报价、评分（M6）
+### 8.4 评标任务、供应商、报价、评分（后端 M6；前端 M2）
 
 | Method | Path | 请求 | `data` 响应 | 权限 |
 |---|---|---|---|---|
@@ -856,7 +1117,7 @@ interface DependencyHealth { status: 'ok'|'degraded'|'down'; dependencies: Array
 | GET | `/evaluations/{evaluationId}/reports/{reportId}/download` | 无 | `Binary` | assigned |
 | POST | `/evaluations/{evaluationId}/close` | `{resultSummary}` | `EvaluationTask` | owner/admin |
 
-### 8.5 供应商 Portal（M6）
+### 8.5 供应商 Portal（后端 M6；前端 M2）
 
 生产 Portal API 不在 URL 中传长期 Token。邀请链接中的 `inviteCode` 只用于交换会话。
 
@@ -878,7 +1139,7 @@ interface DependencyHealth { status: 'ok'|'degraded'|'down'; dependencies: Array
 | POST | `/portal/price-rounds/{roundId}/quotes` | `{amount:Money,currency:'CNY'}` | `QuoteSubmission` | Portal，轮次期限前 |
 | GET | `/portal/activity` | 分页 | `Page<PortalActivity>` | Portal |
 
-### 8.6 文件、异步任务与实时事件（M4/M7）
+### 8.6 文件、异步任务与实时事件（HTTP/状态 M4；Worker M7；前端 M1/M2/M3）
 
 | Method | Path | 请求 | `data` 响应 | 权限 |
 |---|---|---|---|---|
@@ -891,11 +1152,11 @@ interface DependencyHealth { status: 'ok'|'degraded'|'down'; dependencies: Array
 | GET | `/files/{fileId}/download` | 无 | Binary/短期重定向 | 有资源权限者 |
 | GET | `/jobs/{jobId}` | 无 | `JobRef & {result?,error?}` | 发起者/管理员 |
 | POST | `/jobs/{jobId}/cancel` | 无 | `JobRef` | 发起者/管理员 |
-| POST | `/realtime/tickets` | `{channel:'internal'|'portal'}` | `{ticket,expiresAt}` | 当前会话 |
+| POST | `/realtime/tickets` | `{channel:RealtimeChannel}` | `{ticket,expiresAt}` | 当前会话 |
 
 上传规则：分片 8 MiB；单文件最大 200 MiB；并发最多 4 片；SHA-256 必填；允许格式以业务材料配置为准；扫描未完成时业务状态只能是 `pending`。
 
-### 8.7 通知、设置与审计（M4）
+### 8.7 通知、设置与审计（后端 M4；前端 M3；模型运行时 M7）
 
 | Method | Path | 请求 | `data` 响应 | 权限 |
 |---|---|---|---|---|
@@ -1067,30 +1328,49 @@ type RealtimeEventType =
 
 ### Phase 0：契约与骨架
 
-- L0 创建目录、环境、Compose、OpenAPI、CI、数据库基线。
-- M3 建唯一前端 Client；M4 建 FastAPI Envelope/错误/RBAC/健康检查。
-- 完成标准：空库启动、登录、`/health/ready`、生成客户端通过。
+- L0：创建目录、环境、Compose、OpenAPI、生成代码、CI、数据库基线、后端中央 Router 和模型注册器。
+- M3：只在公共前端目录建立应用壳、唯一 API Client、公共状态组件和三组路由聚合接口。
+- M4：只在平台后端目录建立 FastAPI Envelope、错误、鉴权依赖、数据库会话和健康检查。
+- M5/M6：在各自领域目录建立 model/repository/service/router 空骨架和领域测试目录，不改中央 Router。
+- M1/M2：在各自 feature 目录拆分页面组件、定义 UI 状态和基于契约示例的组件测试，不新增接口字段。
+- M7：建立 Fake Provider、Worker 测试骨架、Playwright 配置和稳定选择器规范。
+- 合并顺序：L0 → M3/M4 → M5/M6 → M1/M2 → M7。
+- 完成标准：空库启动、登录骨架、`/health/ready`、生成客户端和各领域空测试通过。
 
 ### Phase 1：公共平台和双工作台
 
-- M4 完成认证/用户/文件/通知；M1/M2/M3 接真实列表与状态。
-- M5/M6 完成任务 CRUD 和状态机骨架。
-- 完成标准：无 Mock 登录，投标/评标/管理列表均来自数据库。
+- M4 先完成认证、用户、文件、Job 元数据、通知和权限接口；M3 随后接入登录、布局、用户、通知和公共上传。
+- M5 完成投标 CRUD、统计/筛选和状态机骨架；M1 在 M5 API 测试通过后接入投标工作台和创建页。
+- M6 完成评标 CRUD、从投标快照创建和状态机骨架；M2 在 M6 API 测试通过后接入评标工作台和创建草稿。
+- M7 完成登录、权限、文件上传和两个工作台的基础 E2E；不替 M1/M2 修改页面。
+- L0 逐个生成模型迁移，按 M4→M5→M6 顺序合并，禁止三个后端 PR 同时携带 revision。
+- 完成标准：无 Mock 登录，投标/评标/管理列表来自数据库，跨租户访问测试通过。
 
 ### Phase 2：投标完整闭环
 
-- M1 + M5 + M7 完成七步流程、资源库、审核、Word 与版本。
-- 完成标准：投标 E2E 全绿，输出 Word 可打开。
+- M5 先交付需求、材料、资质、片段、审核、文档和版本领域接口；M4 提供文件/Job/通知平台端口。
+- M7 在 Job 输入 Schema 稳定后交付解析、匹配、审核和生成 Worker；M5 负责验证结果并落业务表。
+- M1 在后端契约测试通过后接入投标七步页面；M3 同期只负责资质/片段 UI 和所需公共组件。
+- M7 最后编写投标主流程、异步失败、版本冲突和越权 E2E；L0 负责集成回归。
+- 合并顺序：M4 公共前置 → M5 API → M7 Worker → M3 资源库/M1 投标 UI → M7 E2E → L0 集成。
+- 完成标准：投标 E2E 全绿，输出 Word 可打开，版本比较/回滚保留完整历史。
 
 ### Phase 3：评标与 Portal 完整闭环
 
-- M2 + M6 + M7 完成六步流程、供应商、报价、评分、报告、审计。
-- 完成标准：评标和 Portal E2E 全绿，跨供应商隔离通过。
+- M6 先交付发布、供应商会话、材料提交、补材料、报价、风险、评分、排名、报告和关闭接口。
+- M4 提供文件、通知、审计和 Job 平台能力；M7 再交付完整性、风险、评分和报告 Worker。
+- M2 在 M6 契约测试通过后接入内部评标六步和供应商 Portal，禁止直接依赖 M5 或内部登录状态。
+- M7 最后编写邀请交换、跨供应商隔离、截止时间、重复提交、AI 降级和关闭后只读 E2E。
+- 合并顺序：M4 公共前置 → M6 API → M7 Worker → M2 UI → M7 E2E → L0 集成。
+- 完成标准：评标和 Portal E2E 全绿，跨供应商隔离、金额精度、幂等和审计不可篡改通过。
 
 ### Phase 4：系统设置、稳定性与答辩
 
-- M3 + M4 完成全部设置；M7 完成降级和全量 E2E；L0 集成和发布。
-- 完成标准：本文所有页面矩阵和验收项都有测试证据，无死按钮。
+- M4 完成全部设置、连接测试、全局搜索、审计导出和监控接口；M3 完成对应管理页面和错误状态。
+- M1/M2 分别清理自己领域的 Mock、无效按钮、Console 错误、响应式和无障碍问题；不得跨目录互相修页面。
+- M5/M6 分别完成领域性能、权限、状态机和恢复测试；M7 完成 Provider 降级、全量 E2E 与演示数据复位脚本测试。
+- L0 执行依赖/密钥/契约/迁移检查、全量构建、空库启动、演示回归、版本标签和 `develop → main` 发布。
+- 完成标准：本文所有页面矩阵和验收项都有测试证据，无 Mock 业务数据、无死按钮、无契约漂移，`main` 可独立复现演示。
 
 ---
 
