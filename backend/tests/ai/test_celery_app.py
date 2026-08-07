@@ -4,6 +4,17 @@ from __future__ import annotations
 
 import pytest
 
+# 在模块级别导入，确保 Celery Task 自动注册副作用被触发。
+import app.workers.bidding_auditor
+import app.workers.bidding_generator
+import app.workers.bidding_matcher
+import app.workers.bidding_parser
+import app.workers.demo_reset
+import app.workers.eval_integrity
+import app.workers.eval_reporter
+import app.workers.eval_risk
+import app.workers.eval_scorer
+import app.workers.heartbeat  # noqa: F401
 from app.workers.celery_app import celery_app
 from app.workers.settings import WorkerSettings
 
@@ -31,7 +42,6 @@ def test_worker_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_celery_tasks_registered() -> None:
     """所有业务 Task 已在 celery_app 注册（前提是 import 触发）。"""
-
     names = {k for k in celery_app.tasks if k.startswith("app.workers.")}
     assert names == {
         "app.workers.heartbeat.record_heartbeat",
