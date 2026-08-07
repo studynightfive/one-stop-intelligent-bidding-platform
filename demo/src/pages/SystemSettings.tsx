@@ -1,11 +1,12 @@
-import { useState } from 'react'
-import { Card, Switch, Input, Select, Slider, Button, Tag, Table, Progress, Divider, message, Alert, InputNumber } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Card, Switch, Input, Select, Slider, Button, Tag, Table, Progress, Divider, message, Alert, InputNumber, Modal, Form, Space } from 'antd'
 import {
   Bot, Server, FileText, Bell, HardDrive, Cpu, Zap, Shield, AlertTriangle,
   Save, RotateCcw, Eye, EyeOff, Database, Cloud, Clock
 } from 'lucide-react'
 import { aiModelConfig, modelOptions, systemConfig, docTemplateConfig, operationLogs } from '../mock/data'
 import { downloadTableAsCsv } from '../utils/demoActions'
+import { AppUpload } from '../components/common'
 
 type TabKey = 'ai' | 'deploy' | 'template' | 'notify' | 'logs'
 
@@ -21,19 +22,25 @@ export default function SystemSettings() {
   ]
 
   return (
-    <div className="p-6">
+    <main className="p-4 sm:p-6" data-testid="system-settings-page">
+      <div className="mb-6"><h1 className="text-2xl font-semibold text-[#1E293B]">系统设置</h1><p className="mt-1 text-sm text-[#64748B]">统一管理模型路由、部署、模板、通知与操作审计</p></div>
       <div className="flex flex-col lg:flex-row gap-5">
         {/* Left sidebar */}
         <div className="lg:w-52 flex-shrink-0">
-          <div className="rounded-xl border border-[#E2E8F0] bg-white p-2 flex lg:block overflow-x-auto">
+          <div className="rounded-xl border border-[#E2E8F0] bg-white p-2 flex lg:block overflow-x-auto" role="tablist" aria-label="系统设置分类">
             {menuItems.map(item => {
               const Icon = item.icon
               const active = activeTab === item.key
               return (
-                <div
+                <button
+                  type="button"
                   key={item.key}
+                  id={`settings-tab-${item.key}`}
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls={`settings-panel-${item.key}`}
                   onClick={() => setActiveTab(item.key as TabKey)}
-                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors mb-0.5 whitespace-nowrap ${
+                  className={`flex w-full items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors mb-0.5 whitespace-nowrap ${
                     active
                       ? 'bg-[#EFF6FF] text-[#2563EB] font-medium'
                       : 'text-[#475569] hover:bg-[#F8FAFC] hover:text-[#1E293B]'
@@ -41,7 +48,7 @@ export default function SystemSettings() {
                 >
                   <Icon size={16} className="flex-shrink-0" />
                   <span>{item.label}</span>
-                </div>
+                </button>
               )
             })}
           </div>
@@ -49,14 +56,14 @@ export default function SystemSettings() {
 
         {/* Right content */}
         <div className="flex-1 min-w-0">
-          {activeTab === 'ai' && <AIModelSettings />}
-          {activeTab === 'deploy' && <DeploySettings />}
-          {activeTab === 'template' && <TemplateSettings />}
-          {activeTab === 'notify' && <NotifySettings />}
-          {activeTab === 'logs' && <OperationLogs />}
+          <div id="settings-panel-ai" role="tabpanel" aria-labelledby="settings-tab-ai" hidden={activeTab !== 'ai'}><AIModelSettings /></div>
+          <div id="settings-panel-deploy" role="tabpanel" aria-labelledby="settings-tab-deploy" hidden={activeTab !== 'deploy'}><DeploySettings /></div>
+          <div id="settings-panel-template" role="tabpanel" aria-labelledby="settings-tab-template" hidden={activeTab !== 'template'}><TemplateSettings /></div>
+          <div id="settings-panel-notify" role="tabpanel" aria-labelledby="settings-tab-notify" hidden={activeTab !== 'notify'}><NotifySettings /></div>
+          <div id="settings-panel-logs" role="tabpanel" aria-labelledby="settings-tab-logs" hidden={activeTab !== 'logs'}><OperationLogs /></div>
         </div>
       </div>
-    </div>
+    </main>
   )
 }
 
@@ -66,6 +73,8 @@ function AIModelSettings() {
   const [testing, setTesting] = useState('')
   const [dirty, setDirty] = useState(false)
   const [lastSaved, setLastSaved] = useState('')
+  const [providerOpen, setProviderOpen] = useState(false)
+  const [providerForm] = Form.useForm()
   const [providers, setProviders] = useState([
     { id: 'aliyun', name: '阿里云百炼', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'sk-••••••••••••••••a81f', enabled: true, status: 'connected' },
     { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', apiKey: 'sk-••••••••••••••••72c9', enabled: true, status: 'connected' },
@@ -78,6 +87,7 @@ function AIModelSettings() {
     { id: 'review', scene: '内容与废标风险审核', primary: 'deepseek-v3', fallback: 'qwen-plus' },
     { id: 'evaluation', scene: '评标分析', primary: 'deepseek-v3', fallback: 'glm-4-plus' },
   ])
+  useUnsavedChangesGuard(dirty)
 
   const updateProvider = (id: string, patch: Record<string, any>) => {
     setProviders(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item))
@@ -119,6 +129,23 @@ function AIModelSettings() {
     message.success('AI 模型配置已保存')
   }
 
+  const addProvider = async () => {
+    const values = await providerForm.validateFields()
+    const suffix = String(values.apiKey).slice(-4)
+    setProviders(previous => [...previous, {
+      id: `provider-${Date.now()}`,
+      name: values.name,
+      baseUrl: values.baseUrl,
+      apiKey: `••••••••••••••••••${suffix}`,
+      enabled: true,
+      status: 'connected',
+    }])
+    setProviderOpen(false)
+    providerForm.resetFields()
+    setDirty(true)
+    message.success('模型服务商已添加，密钥已脱敏显示')
+  }
+
   return (
     <div className="space-y-4">
       {/* Model routing */}
@@ -139,7 +166,7 @@ function AIModelSettings() {
       </Card>
 
       {/* Provider credentials */}
-      <Card className="!border-[#E2E8F0] !shadow-none" title={<span className="text-sm font-semibold flex items-center gap-2"><Shield size={16} color="#2563EB" /> 模型服务商与凭据</span>}>
+      <Card className="!border-[#E2E8F0] !shadow-none" title={<span className="text-sm font-semibold flex items-center gap-2"><Shield size={16} color="#2563EB" /> 模型服务商与凭据</span>} extra={<Button size="small" onClick={() => setProviderOpen(true)}>新增服务商</Button>}>
         <Alert
           type="warning"
           showIcon
@@ -155,7 +182,7 @@ function AIModelSettings() {
           columns={[
             { title: '服务商', dataIndex: 'name', width: 130, render: (value: string, record: any) => <div><div className="font-medium text-[#1E293B]">{value}</div><Tag color={record.status === 'connected' ? 'green' : 'red'} className="mt-1">{record.status === 'connected' ? '连接正常' : '连接异常'}</Tag></div> },
             { title: 'Base URL', dataIndex: 'baseUrl', render: (value: string, record: any) => <Input value={value} onChange={event => updateProvider(record.id, { baseUrl: event.target.value })} /> },
-            { title: 'API Key（脱敏）', dataIndex: 'apiKey', width: 220, render: (value: string, record: any) => <Input value={value} type="password" onChange={event => updateProvider(record.id, { apiKey: event.target.value })} addonAfter={<Button type="link" size="small" className="!px-0" onClick={() => message.info(`${record.name} 密钥更新入口（Demo）`)}>更新</Button>} /> },
+            { title: 'API Key（脱敏）', dataIndex: 'apiKey', width: 250, render: (value: string, record: any) => <Space.Compact className="w-full"><Input value={value} type="password" onChange={event => updateProvider(record.id, { apiKey: event.target.value })} /><Button onClick={() => message.info(`${record.name} 密钥更新入口（Demo）`)}>更新</Button></Space.Compact> },
             { title: '启用', dataIndex: 'enabled', width: 70, render: (value: boolean, record: any) => <Switch checked={value} onChange={checked => updateProvider(record.id, { enabled: checked })} /> },
             { title: '连接测试', width: 100, render: (_: any, record: any) => <Button size="small" loading={testing === record.id} disabled={!record.enabled} onClick={() => testProvider(record.id, record.name)}>测试连接</Button> },
           ]}
@@ -262,33 +289,73 @@ function AIModelSettings() {
           <Button onClick={saveAIConfig} type="primary" icon={<Save size={15} />} disabled={!dirty}>保存配置</Button>
         </div>
       </div>
+
+      <Modal title="新增模型服务商" open={providerOpen} onCancel={() => setProviderOpen(false)} onOk={addProvider} okText="添加" cancelText="取消">
+        <Form form={providerForm} layout="vertical" requiredMark={false} className="pt-3">
+          <Form.Item name="name" label="显示名称" rules={[{ required: true, message: '请输入服务商名称' }]}><Input placeholder="企业模型网关" /></Form.Item>
+          <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, type: 'url', message: '请输入有效 URL' }]}><Input placeholder="https://ai.example.com/v1" /></Form.Item>
+          <Form.Item name="apiKey" label="API Key" rules={[{ required: true, min: 8, message: '请输入有效密钥' }]}><Input.Password placeholder="保存后仅显示末四位" /></Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }
 
 function DeploySettings() {
-  const storagePercent = Math.round((systemConfig.storageUsed / systemConfig.storageQuota) * 100)
+  const defaults = {
+    deploymentMode: systemConfig.deploymentMode,
+    companyName: systemConfig.companyName,
+    maxProjects: systemConfig.maxProjects,
+    maxUsers: systemConfig.maxUsers,
+    storageQuota: systemConfig.storageQuota,
+    enableAutoBackup: systemConfig.enableAutoBackup,
+    enableVersionControl: systemConfig.enableVersionControl,
+    backupFrequency: 'daily',
+  }
+  const [config, setConfig] = useState(defaults)
+  const [dirty, setDirty] = useState(false)
+  const [lastSaved, setLastSaved] = useState('')
+  const storagePercent = Math.round((systemConfig.storageUsed / config.storageQuota) * 100)
+  useUnsavedChangesGuard(dirty)
+
+  const updateConfig = (patch: Partial<typeof defaults>) => {
+    setConfig(previous => ({ ...previous, ...patch }))
+    setDirty(true)
+  }
+
+  const reset = () => {
+    setConfig(defaults)
+    setDirty(true)
+    message.info('已恢复部署默认值，请保存后生效')
+  }
+
+  const save = () => {
+    setDirty(false)
+    setLastSaved(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    message.success('部署、存储与备份配置已保存')
+  }
 
   return (
     <div className="space-y-4">
       {/* Deployment mode */}
       <Card className="!border-[#E2E8F0] !shadow-none" title={<span className="text-sm font-semibold flex items-center gap-2"><Cloud size={16} color="#2563EB" /> 部署模式</span>}>
         <div className="grid grid-cols-2 gap-4">
-          <div className={`rounded-xl border-2 p-4 cursor-pointer transition-colors ${systemConfig.deploymentMode === 'saas' ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0]'}`}>
+          <button type="button" onClick={() => updateConfig({ deploymentMode: 'saas' })} className={`rounded-xl border-2 p-4 text-left transition-colors ${config.deploymentMode === 'saas' ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0]'}`}>
             <div className="flex items-center gap-2 mb-2">
               <Cloud size={18} color="#2563EB" />
               <span className="text-sm font-semibold text-[#1E293B]">SaaS 多租户</span>
-              {systemConfig.deploymentMode === 'saas' && <Tag color="blue" className="!text-xs !ml-auto">当前</Tag>}
+              {config.deploymentMode === 'saas' && <Tag color="blue" className="!text-xs !ml-auto">当前</Tag>}
             </div>
             <p className="text-xs text-[#64748B] leading-relaxed">共享云基础设施，按租户隔离数据，开箱即用，无需运维</p>
-          </div>
-          <div className="rounded-xl border-2 border-[#E2E8F0] p-4 cursor-pointer hover:border-[#CBD5E1]">
+          </button>
+          <button type="button" onClick={() => updateConfig({ deploymentMode: 'private' })} className={`rounded-xl border-2 p-4 text-left transition-colors ${config.deploymentMode === 'private' ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0] hover:border-[#CBD5E1]'}`}>
             <div className="flex items-center gap-2 mb-2">
               <Server size={18} color="#64748B" />
               <span className="text-sm font-semibold text-[#1E293B]">私有化部署</span>
+              {config.deploymentMode === 'private' && <Tag color="blue" className="!text-xs !ml-auto">当前</Tag>}
             </div>
             <p className="text-xs text-[#64748B] leading-relaxed">独立部署在企业内网，数据完全自主可控，支持定制化</p>
-          </div>
+          </button>
         </div>
       </Card>
 
@@ -297,19 +364,19 @@ function DeploySettings() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs text-[#64748B] mb-2">企业名称</label>
-            <Input defaultValue={systemConfig.companyName} />
+            <Input value={config.companyName} onChange={event => updateConfig({ companyName: event.target.value })} />
           </div>
           <div>
             <label className="block text-xs text-[#64748B] mb-2">最大项目数</label>
-            <Input type="number" defaultValue={systemConfig.maxProjects} addonAfter="个" />
+            <Space.Compact className="w-full"><InputNumber min={1} value={config.maxProjects} onChange={value => updateConfig({ maxProjects: value || 1 })} className="!w-full" /><Input value="个" disabled className="!w-14 !text-center" aria-label="项目数量单位" /></Space.Compact>
           </div>
           <div>
             <label className="block text-xs text-[#64748B] mb-2">最大用户数</label>
-            <Input type="number" defaultValue={systemConfig.maxUsers} addonAfter="人" />
+            <Space.Compact className="w-full"><InputNumber min={1} value={config.maxUsers} onChange={value => updateConfig({ maxUsers: value || 1 })} className="!w-full" /><Input value="人" disabled className="!w-14 !text-center" aria-label="用户数量单位" /></Space.Compact>
           </div>
           <div>
             <label className="block text-xs text-[#64748B] mb-2">存储配额</label>
-            <Input type="number" defaultValue={systemConfig.storageQuota} addonAfter="GB" />
+            <Space.Compact className="w-full"><InputNumber min={systemConfig.storageUsed} value={config.storageQuota} onChange={value => updateConfig({ storageQuota: value || systemConfig.storageUsed })} className="!w-full" /><Input value="GB" disabled className="!w-14 !text-center" aria-label="存储配额单位" /></Space.Compact>
           </div>
         </div>
       </Card>
@@ -319,7 +386,7 @@ function DeploySettings() {
         <div className="flex items-center gap-4">
           <div className="flex-1">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-[#64748B]">已使用 {systemConfig.storageUsed} GB / {systemConfig.storageQuota} GB</span>
+              <span className="text-xs text-[#64748B]">已使用 {systemConfig.storageUsed} GB / {config.storageQuota} GB</span>
               <span className="text-xs font-medium text-[#1E293B]">{storagePercent}%</span>
             </div>
             <Progress percent={storagePercent} strokeColor="#2563EB" showInfo={false} />
@@ -351,7 +418,7 @@ function DeploySettings() {
               <div className="text-sm text-[#1E293B] font-medium">自动备份</div>
               <div className="text-xs text-[#64748B] mt-0.5">定期备份所有数据，防止数据丢失</div>
             </div>
-            <Switch defaultChecked={systemConfig.enableAutoBackup} />
+            <Switch checked={config.enableAutoBackup} onChange={checked => updateConfig({ enableAutoBackup: checked })} />
           </div>
           <Divider className="!my-3" />
           <div className="flex items-center justify-between">
@@ -359,20 +426,52 @@ function DeploySettings() {
               <div className="text-sm text-[#1E293B] font-medium">版本控制</div>
               <div className="text-xs text-[#64748B] mt-0.5">保留所有投标文件版本，支持回溯对比</div>
             </div>
-            <Switch defaultChecked={systemConfig.enableVersionControl} />
+            <Switch checked={config.enableVersionControl} onChange={checked => updateConfig({ enableVersionControl: checked })} />
+          </div>
+          <Divider className="!my-3" />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><div className="text-sm font-medium text-[#1E293B]">备份频率</div><div className="mt-0.5 text-xs text-[#64748B]">自动备份保留最近 30 个恢复点</div></div>
+            <div className="flex items-center gap-2"><Select disabled={!config.enableAutoBackup} value={config.backupFrequency} onChange={value => updateConfig({ backupFrequency: value })} options={[{ value: 'hourly', label: '每小时' }, { value: 'daily', label: '每天' }, { value: 'weekly', label: '每周' }]} className="w-28" /><Button onClick={() => message.success('手动备份任务已创建')}>立即备份</Button></div>
           </div>
         </div>
       </Card>
 
-      <div className="flex justify-end gap-3">
-        <Button onClick={() => message.info('部署与存储配置已恢复为演示默认值')} icon={<RotateCcw size={15} />}>恢复默认</Button>
-        <Button onClick={() => message.success('部署与存储配置已保存')} type="primary" icon={<Save size={15} />}>保存配置</Button>
+      <div className="sticky bottom-3 z-10 flex items-center justify-between gap-3 rounded-xl border border-[#E2E8F0] bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+        <span className={`text-xs ${dirty ? 'text-[#D97706]' : 'text-[#64748B]'}`}>{dirty ? '存在未保存配置' : lastSaved ? `已保存于 ${lastSaved}` : '当前配置已同步'}</span>
+        <div className="flex gap-3"><Button onClick={reset} icon={<RotateCcw size={15} />}>恢复默认</Button><Button disabled={!dirty} onClick={save} type="primary" icon={<Save size={15} />}>保存配置</Button></div>
       </div>
     </div>
   )
 }
 
 function TemplateSettings() {
+  const defaults = { ...docTemplateConfig }
+  const [config, setConfig] = useState(defaults)
+  const [templateFile, setTemplateFile] = useState('标准投标文件模板.docx')
+  const [logoFile, setLogoFile] = useState('企业标识.png')
+  const [dirty, setDirty] = useState(false)
+  const [lastSaved, setLastSaved] = useState('')
+  useUnsavedChangesGuard(dirty)
+
+  const updateConfig = (patch: Partial<typeof defaults>) => {
+    setConfig(previous => ({ ...previous, ...patch }))
+    setDirty(true)
+  }
+
+  const reset = () => {
+    setConfig(defaults)
+    setTemplateFile('标准投标文件模板.docx')
+    setLogoFile('企业标识.png')
+    setDirty(true)
+    message.info('已恢复文档模板默认值，请保存后生效')
+  }
+
+  const save = () => {
+    setDirty(false)
+    setLastSaved(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    message.success('文档模板配置已保存')
+  }
+
   return (
     <div className="space-y-4">
       <Card className="!border-[#E2E8F0] !shadow-none" title={<span className="text-sm font-semibold flex items-center gap-2"><FileText size={16} color="#2563EB" /> 文档输出格式</span>}>
@@ -381,7 +480,8 @@ function TemplateSettings() {
             <label className="block text-xs text-[#64748B] mb-2">默认格式</label>
             <Select
               className="w-full"
-              defaultValue={docTemplateConfig.defaultFormat}
+              value={config.defaultFormat}
+              onChange={value => updateConfig({ defaultFormat: value })}
               options={[
                 { value: 'standard', label: '标准格式' },
                 { value: 'custom', label: '自定义格式' },
@@ -392,7 +492,8 @@ function TemplateSettings() {
             <label className="block text-xs text-[#64748B] mb-2">页面大小</label>
             <Select
               className="w-full"
-              defaultValue={docTemplateConfig.pageSize}
+              value={config.pageSize}
+              onChange={value => updateConfig({ pageSize: value })}
               options={[
                 { value: 'A4', label: 'A4' },
                 { value: 'A3', label: 'A3' },
@@ -404,7 +505,8 @@ function TemplateSettings() {
             <label className="block text-xs text-[#64748B] mb-2">正文字体</label>
             <Select
               className="w-full"
-              defaultValue={docTemplateConfig.fontFamily}
+              value={config.fontFamily}
+              onChange={value => updateConfig({ fontFamily: value })}
               options={[
                 { value: '宋体', label: '宋体' },
                 { value: '仿宋', label: '仿宋' },
@@ -417,7 +519,8 @@ function TemplateSettings() {
             <label className="block text-xs text-[#64748B] mb-2">字号</label>
             <Select
               className="w-full"
-              defaultValue={docTemplateConfig.fontSize}
+              value={config.fontSize}
+              onChange={value => updateConfig({ fontSize: value })}
               options={[
                 { value: '10pt', label: '10pt' },
                 { value: '12pt', label: '12pt' },
@@ -429,7 +532,8 @@ function TemplateSettings() {
             <label className="block text-xs text-[#64748B] mb-2">行距</label>
             <Select
               className="w-full"
-              defaultValue={docTemplateConfig.lineHeight}
+              value={config.lineHeight}
+              onChange={value => updateConfig({ lineHeight: value })}
               options={[
                 { value: '1.0', label: '单倍行距' },
                 { value: '1.15', label: '1.15倍' },
@@ -442,7 +546,8 @@ function TemplateSettings() {
             <label className="block text-xs text-[#64748B] mb-2">页边距</label>
             <Select
               className="w-full"
-              defaultValue={docTemplateConfig.margin}
+              value={config.margin}
+              onChange={value => updateConfig({ margin: value })}
               options={[
                 { value: '标准', label: '标准' },
                 { value: '窄', label: '窄' },
@@ -460,7 +565,7 @@ function TemplateSettings() {
               <div className="text-sm text-[#1E293B] font-medium">自动拆分投标文件</div>
               <div className="text-xs text-[#64748B] mt-0.5">根据招标文件要求，自动拆分为资质标、商务标、技术标</div>
             </div>
-            <Switch defaultChecked={docTemplateConfig.enableAutoSplit} />
+            <Switch checked={config.enableAutoSplit} onChange={checked => updateConfig({ enableAutoSplit: checked })} />
           </div>
           <Divider className="!my-3" />
           <div className="flex items-center justify-between">
@@ -468,24 +573,67 @@ function TemplateSettings() {
               <div className="text-sm text-[#1E293B] font-medium">文档水印</div>
               <div className="text-xs text-[#64748B] mt-0.5">在输出文档中添加企业标识水印</div>
             </div>
-            <Switch defaultChecked={docTemplateConfig.watermark} />
+            <Switch checked={config.watermark} onChange={checked => updateConfig({ watermark: checked })} />
           </div>
           <div>
             <label className="block text-xs text-[#64748B] mb-2">水印文字</label>
-            <Input defaultValue={docTemplateConfig.watermarkText} />
+            <Input disabled={!config.watermark} value={config.watermarkText} onChange={event => updateConfig({ watermarkText: event.target.value })} />
           </div>
         </div>
       </Card>
 
-      <div className="flex justify-end gap-3">
-        <Button onClick={() => message.info('文档模板配置已恢复为演示默认值')} icon={<RotateCcw size={15} />}>恢复默认</Button>
-        <Button onClick={() => message.success('文档模板配置已保存')} type="primary" icon={<Save size={15} />}>保存配置</Button>
+      <Card className="!border-[#E2E8F0] !shadow-none" title={<span className="text-sm font-semibold flex items-center gap-2"><FileText size={16} color="#2563EB" /> 企业模板文件</span>}>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-[#E2E8F0] p-4"><div className="mb-1 text-sm font-medium text-[#1E293B]">Word 主模板</div><div className="mb-3 text-xs text-[#64748B]">当前：{templateFile}</div><AppUpload compact accept=".doc,.docx" label="更换 Word 模板" onFiles={files => { setTemplateFile(files[0].name); setDirty(true); message.success('Word 模板已选择，保存后生效') }} /></div>
+          <div className="rounded-xl border border-[#E2E8F0] p-4"><div className="mb-1 text-sm font-medium text-[#1E293B]">企业 Logo</div><div className="mb-3 text-xs text-[#64748B]">当前：{logoFile}</div><AppUpload compact accept=".png,.jpg,.jpeg,.svg" maxSizeMb={5} label="更换企业标识" onFiles={files => { setLogoFile(files[0].name); setDirty(true); message.success('企业标识已选择，保存后生效') }} /></div>
+        </div>
+      </Card>
+
+      <div className="sticky bottom-3 z-10 flex items-center justify-between gap-3 rounded-xl border border-[#E2E8F0] bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+        <span className={`text-xs ${dirty ? 'text-[#D97706]' : 'text-[#64748B]'}`}>{dirty ? '存在未保存配置' : lastSaved ? `已保存于 ${lastSaved}` : '当前配置已同步'}</span>
+        <div className="flex gap-3"><Button onClick={reset} icon={<RotateCcw size={15} />}>恢复默认</Button><Button disabled={!dirty} onClick={save} type="primary" icon={<Save size={15} />}>保存配置</Button></div>
       </div>
     </div>
   )
 }
 
 function NotifySettings() {
+  const defaultEvents = [
+    { id: 'task_assigned', label: '任务分配', desc: '有新任务分配给你时通知', enabled: true },
+    { id: 'ai_review', label: 'AI审核完成', desc: 'AI审核有结果时通知', enabled: true },
+    { id: 'material_uploaded', label: '材料上传完成', desc: '团队成员上传材料时通知', enabled: true },
+    { id: 'document_version', label: '文档版本更新', desc: '投标文件生成新版本时通知', enabled: true },
+    { id: 'qualification_status', label: '资质状态变更', desc: '资质过期/更新时通知', enabled: true },
+    { id: 'member_changed', label: '成员加入/退出', desc: '项目成员变动时通知', enabled: false },
+  ]
+  const defaults = {
+    site: systemConfig.enableNotification,
+    email: systemConfig.enableEmailNotify,
+    expiry: systemConfig.enableExpiryWarning,
+    warningDays: systemConfig.expiryWarningDays,
+  }
+  const [config, setConfig] = useState(defaults)
+  const [events, setEvents] = useState(defaultEvents)
+  const [dirty, setDirty] = useState(false)
+  const [lastSaved, setLastSaved] = useState('')
+  useUnsavedChangesGuard(dirty)
+
+  const updateConfig = (patch: Partial<typeof defaults>) => {
+    setConfig(previous => ({ ...previous, ...patch }))
+    setDirty(true)
+  }
+  const reset = () => {
+    setConfig(defaults)
+    setEvents(defaultEvents)
+    setDirty(true)
+    message.info('已恢复通知默认值，请保存后生效')
+  }
+  const save = () => {
+    setDirty(false)
+    setLastSaved(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    message.success('通知配置已保存')
+  }
+
   return (
     <div className="space-y-4">
       <Card className="!border-[#E2E8F0] !shadow-none" title={<span className="text-sm font-semibold flex items-center gap-2"><Bell size={16} color="#2563EB" /> 通知开关</span>}>
@@ -495,7 +643,7 @@ function NotifySettings() {
               <div className="text-sm text-[#1E293B] font-medium">站内通知</div>
               <div className="text-xs text-[#64748B] mt-0.5">平台内消息提醒</div>
             </div>
-            <Switch defaultChecked={systemConfig.enableNotification} />
+            <Switch checked={config.site} onChange={checked => updateConfig({ site: checked })} />
           </div>
           <Divider className="!my-3" />
           <div className="flex items-center justify-between">
@@ -503,7 +651,7 @@ function NotifySettings() {
               <div className="text-sm text-[#1E293B] font-medium">邮件通知</div>
               <div className="text-xs text-[#64748B] mt-0.5">重要事件通过邮件推送</div>
             </div>
-            <Switch defaultChecked={systemConfig.enableEmailNotify} />
+            <Switch checked={config.email} onChange={checked => updateConfig({ email: checked })} />
           </div>
         </div>
       </Card>
@@ -515,14 +663,16 @@ function NotifySettings() {
               <div className="text-sm text-[#1E293B] font-medium">资质过期预警</div>
               <div className="text-xs text-[#64748B] mt-0.5">资质即将过期时自动提醒相关人员</div>
             </div>
-            <Switch defaultChecked={systemConfig.enableExpiryWarning} />
+            <Switch checked={config.expiry} onChange={checked => updateConfig({ expiry: checked })} />
           </div>
           <Divider className="!my-3" />
           <div className="flex items-center gap-4">
             <label className="text-xs text-[#64748B] whitespace-nowrap">提前预警天数</label>
             <Select
               style={{ width: 120 }}
-              defaultValue={systemConfig.expiryWarningDays}
+              disabled={!config.expiry}
+              value={config.warningDays}
+              onChange={value => updateConfig({ warningDays: value })}
               options={[
                 { value: 15, label: '15天' },
                 { value: 30, label: '30天' },
@@ -543,34 +693,34 @@ function NotifySettings() {
 
       <Card className="!border-[#E2E8F0] !shadow-none" title={<span className="text-sm font-semibold flex items-center gap-2"><Bell size={16} color="#2563EB" /> 通知事件配置</span>}>
         <div className="space-y-3">
-          {[
-            { label: '任务分配', desc: '有新任务分配给你时通知', enabled: true },
-            { label: 'AI审核完成', desc: 'AI审核有结果时通知', enabled: true },
-            { label: '材料上传完成', desc: '团队成员上传材料时通知', enabled: true },
-            { label: '文档版本更新', desc: '投标文件生成新版本时通知', enabled: true },
-            { label: '资质状态变更', desc: '资质过期/更新时通知', enabled: true },
-            { label: '成员加入/退出', desc: '项目成员变动时通知', enabled: false },
-          ].map(item => (
-            <div key={item.label} className="flex items-center justify-between py-1">
+          {events.map(item => (
+            <div key={item.id} className="flex items-center justify-between py-1">
               <div>
                 <div className="text-sm text-[#1E293B]">{item.label}</div>
                 <div className="text-xs text-[#64748B] mt-0.5">{item.desc}</div>
               </div>
-              <Switch defaultChecked={item.enabled} size="small" />
+              <Switch checked={item.enabled} size="small" onChange={checked => { setEvents(previous => previous.map(event => event.id === item.id ? { ...event, enabled: checked } : event)); setDirty(true) }} />
             </div>
           ))}
         </div>
       </Card>
 
-      <div className="flex justify-end gap-3">
-        <Button onClick={() => message.info('通知配置已恢复为演示默认值')} icon={<RotateCcw size={15} />}>恢复默认</Button>
-        <Button onClick={() => message.success('通知配置已保存')} type="primary" icon={<Save size={15} />}>保存配置</Button>
+      <div className="sticky bottom-3 z-10 flex items-center justify-between gap-3 rounded-xl border border-[#E2E8F0] bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+        <span className={`text-xs ${dirty ? 'text-[#D97706]' : 'text-[#64748B]'}`}>{dirty ? '存在未保存配置' : lastSaved ? `已保存于 ${lastSaved}` : '当前配置已同步'}</span>
+        <div className="flex gap-3"><Button onClick={reset} icon={<RotateCcw size={15} />}>恢复默认</Button><Button disabled={!dirty} onClick={save} type="primary" icon={<Save size={15} />}>保存配置</Button></div>
       </div>
     </div>
   )
 }
 
 function OperationLogs() {
+  const [keyword, setKeyword] = useState('')
+  const [actionFilter, setActionFilter] = useState('all')
+  const actions = Array.from(new Set(operationLogs.map(row => row.action)))
+  const filteredLogs = useMemo(() => operationLogs.filter(row => {
+    const matchesKeyword = !keyword.trim() || `${row.user} ${row.action} ${row.target} ${row.ip}`.toLowerCase().includes(keyword.trim().toLowerCase())
+    return matchesKeyword && (actionFilter === 'all' || row.action === actionFilter)
+  }), [keyword, actionFilter])
   const columns = [
     {
       title: '时间',
@@ -606,14 +756,27 @@ function OperationLogs() {
   ]
 
   return (
-    <Card className="!border-[#E2E8F0] !shadow-none overflow-x-auto" title={<span className="text-sm font-semibold flex items-center gap-2"><Clock size={16} color="#2563EB" /> 操作日志</span>} extra={<Button size="small" onClick={() => downloadTableAsCsv('系统操作日志.csv', ['时间', '用户', '操作', '目标', 'IP地址'], operationLogs.map(row => [row.time, row.user, row.action, row.target, row.ip]))}>导出日志</Button>}>
+    <Card className="!border-[#E2E8F0] !shadow-none overflow-x-auto" title={<span className="text-sm font-semibold flex items-center gap-2"><Clock size={16} color="#2563EB" /> 操作日志</span>} extra={<Button size="small" onClick={() => downloadTableAsCsv('系统操作日志.csv', ['时间', '用户', '操作', '目标', 'IP地址'], filteredLogs.map(row => [row.time, row.user, row.action, row.target, row.ip]))}>导出当前结果</Button>}>
+      <div className="mb-4 flex flex-wrap gap-2"><Input allowClear value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="搜索用户、操作、目标或 IP" className="!w-72" /><Select value={actionFilter} onChange={setActionFilter} options={[{ value: 'all', label: '全部操作' }, ...actions.map(value => ({ value, label: value }))]} className="w-40" /><Button onClick={() => { setKeyword(''); setActionFilter('all') }}>重置</Button><span className="self-center text-xs text-[#64748B]">共 {filteredLogs.length} 条</span></div>
       <Table
         columns={columns}
-        dataSource={operationLogs}
+        dataSource={filteredLogs}
         rowKey="id"
         pagination={{ pageSize: 10, showSizeChanger: false }}
         size="middle"
       />
     </Card>
   )
+}
+
+function useUnsavedChangesGuard(dirty: boolean) {
+  useEffect(() => {
+    if (!dirty) return undefined
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [dirty])
 }
