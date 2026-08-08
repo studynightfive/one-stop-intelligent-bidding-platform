@@ -4,13 +4,14 @@
 版本锚定见 PROJECT_MASTER_PROMPT.md 第4.1节。
 """
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -98,7 +99,7 @@ class Settings(BaseSettings):
     }
 
     # === CORS配置 ===
-    cors_origins: list[str] = ["http://127.0.0.1:3210"]
+    cors_origins: Annotated[list[str], NoDecode] = ["http://127.0.0.1:3210"]
     cors_allow_credentials: bool = True
     cors_allow_methods: list[str] = ["*"]
     cors_allow_headers: list[str] = ["*"]
@@ -118,6 +119,26 @@ class Settings(BaseSettings):
     openapi_contract_path: Path = Path(__file__).parents[2] / "contracts" / "openapi.yaml"
 
     # === 路径校验 ===
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value: object) -> object:
+        """Accept the documented comma-separated value and JSON arrays."""
+        if not isinstance(value, str):
+            return value
+
+        raw_value = value.strip()
+        if not raw_value:
+            return []
+        if raw_value.startswith("["):
+            try:
+                parsed = json.loads(raw_value)
+            except json.JSONDecodeError as exc:
+                raise ValueError("CORS_ORIGINS must be a comma-separated list or JSON array") from exc
+            if not isinstance(parsed, list):
+                raise ValueError("CORS_ORIGINS JSON value must be an array")
+            return parsed
+        return [item.strip() for item in raw_value.split(",") if item.strip()]
+
     @field_validator("jwt_private_key_path", "jwt_public_key_path", "model_master_key_path")
     @classmethod
     def validate_secret_path(cls, v: Path) -> Path:
