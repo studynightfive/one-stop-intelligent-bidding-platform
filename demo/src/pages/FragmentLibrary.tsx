@@ -1,219 +1,213 @@
-import { useState } from 'react'
-import { Button, Tag, Input, Empty, Modal, Form, Select, Upload, message, Segmented } from 'antd'
-import {
-  Plus, Search, FileText, Clock, TrendingUp, Zap, FileStack,
-  BookOpen, Wrench, GraduationCap, Lightbulb, Package, MoreHorizontal, Download
-} from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Button, Form, Input, Modal, Pagination, Segmented, Select, Switch, Table, Tag, message } from 'antd'
+import { BookOpen, Clock, FileStack, FileText, GraduationCap, History, Lightbulb, Package, Plus, Quote, Search, Sparkles, Trash2, TrendingUp, Wrench } from 'lucide-react'
 import { fragmentCategories } from '../mock/data'
 import { useDemo } from '../context/DemoContext'
+import { ConfirmAction, EmptyState, FilePreview, FilterBar, PermissionGate } from '../components/common'
+import { appendLibraryVersion, nextDocumentVersion, paginate, rankFragmentsSemantic } from '../features/libraries/utils'
+import type { FragmentRecord } from '../features/libraries/types'
 
-const categoryIcons: Record<string, any> = {
-  '产品手册': Package,
-  '功能手册': Wrench,
-  '实施方案': FileStack,
-  '培训方案': GraduationCap,
-  '解决方案': Lightbulb,
-  '商务文件': BookOpen
+const categoryIcons: Record<string, typeof FileText> = {
+  产品手册: Package,
+  功能手册: Wrench,
+  实施方案: FileStack,
+  培训方案: GraduationCap,
+  解决方案: Lightbulb,
+  商务文件: BookOpen,
 }
 
 export default function FragmentLibrary() {
-  const { fragments, setFragments } = useDemo()
+  const { fragments, setFragments, permissions } = useDemo()
   const [category, setCategory] = useState('全部')
-  const [keyword, setKeyword] = useState('')
+  const [query, setQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'keyword' | 'semantic'>('keyword')
-  const [uploadOpen, setUploadOpen] = useState(false)
-  const [selectedFile, setSelectedFile] = useState('')
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editing, setEditing] = useState<FragmentRecord | null>(null)
+  const [historyRecord, setHistoryRecord] = useState<FragmentRecord | null>(null)
+  const [referenceRecord, setReferenceRecord] = useState<FragmentRecord | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(9)
   const [form] = Form.useForm()
 
-  const aiMatchedIds = ['FRAG-003', 'FRAG-004', 'FRAG-005', 'FRAG-006', 'FRAG-007']
-  const matchScores: Record<string, number> = { 'FRAG-003': 96, 'FRAG-004': 93, 'FRAG-005': 91, 'FRAG-006': 88, 'FRAG-007': 84 }
+  const normalized = useMemo(() => (fragments as FragmentRecord[]).map(record => ({
+    ...record,
+    source: record.source || record.fileName || '历史片段库迁移',
+    version: record.version || 'v1.0',
+    content: record.content || record.preview,
+    references: record.references || [],
+  })), [fragments])
 
-  const filtered = fragments.filter(f => {
-    const matchCat = category === '全部' || f.category === category
-    const matchKw = !keyword || f.title.includes(keyword) || f.preview.includes(keyword) || f.tags.some((t: string) => t.includes(keyword))
-    const matchMode = searchMode === 'keyword' || aiMatchedIds.includes(f.id)
-    return matchCat && matchKw && matchMode
-  })
+  const searched = useMemo(() => {
+    if (searchMode === 'semantic') return rankFragmentsSemantic(normalized, query)
+    const keyword = query.trim().toLowerCase()
+    return normalized.filter(record => !keyword || `${record.title} ${record.preview} ${record.tags.join(' ')} ${record.source}`.toLowerCase().includes(keyword))
+  }, [normalized, query, searchMode])
+  const filtered = searched.filter(record => category === '全部' || record.category === category)
+  const paged = paginate(filtered, page, pageSize)
+
+  const resetFilters = () => {
+    setCategory('全部')
+    setQuery('')
+    setSearchMode('keyword')
+    setPage(1)
+  }
+
+  const openEditor = (record?: FragmentRecord, createNewVersion = false) => {
+    setEditing(record || null)
+    form.setFieldsValue(record ? {
+      ...record,
+      tags: record.tags.join('，'),
+      createNewVersion,
+      changeNote: createNewVersion ? '更新片段内容与源文档' : '',
+    } : {
+      category: '解决方案',
+      source: '手工录入',
+      createNewVersion: true,
+    })
+    setEditorOpen(true)
+  }
 
   const saveFragment = async () => {
     const values = await form.validateFields()
-    setFragments(prev => [{
-      id: `FRAG-${Date.now()}`,
-      title: values.title,
-      category: values.category,
-      preview: values.preview,
-      tags: String(values.tags || '').split(/[，,]/).map(value => value.trim()).filter(Boolean),
-      useCount: 0,
-      updatedAt: new Date().toLocaleDateString('zh-CN'),
-      fileName: selectedFile || `${values.title}.docx`,
-      version: 'v1.0',
-      source: selectedFile ? '上传源文档' : '手工录入',
-    }, ...prev])
-    setUploadOpen(false)
-    setSelectedFile('')
+    const tags = String(values.tags || '').split(/[，,]/).map(value => value.trim()).filter(Boolean)
+    const shouldVersion = Boolean(editing && values.createNewVersion)
+    const version = shouldVersion ? nextDocumentVersion(editing?.version) : editing?.version || 'v1.0'
+    const now = new Date().toLocaleString('zh-CN', { hour12: false })
+    const record: FragmentRecord = {
+      ...editing,
+      ...values,
+      id: editing?.id || `FRAG-${Date.now()}`,
+      title: values.title.trim(),
+      preview: values.preview.trim(),
+      content: (values.content || values.preview).trim(),
+      tags,
+      useCount: editing?.useCount || 0,
+      updatedAt: now,
+      fileName: values.fileName || editing?.fileName,
+      version,
+      references: editing?.references || [],
+      versions: shouldVersion || !editing
+        ? appendLibraryVersion(editing?.versions, {
+            version,
+            fileName: values.fileName || editing?.fileName,
+            changeNote: values.changeNote || (editing ? '更新片段' : '首次入库'),
+          })
+        : editing.versions,
+    }
+    delete (record as FragmentRecord & { createNewVersion?: boolean }).createNewVersion
+    setFragments(previous => editing ? previous.map(item => item.id === editing.id ? record : item) : [record, ...previous])
+    setEditorOpen(false)
+    setEditing(null)
     form.resetFields()
-    message.success('文档片段已上传并完成索引')
+    message.success(shouldVersion ? `片段已更新为 ${version}` : editing ? '片段已保存' : '片段已上传并完成索引')
   }
 
-  const referenceFragment = (item: any) => {
-    setFragments(prev => prev.map(row => row.id === item.id ? { ...row, useCount: row.useCount + 1 } : row))
-    message.success(`已引用“${item.title}”到当前演示标书`)
+  const referenceFragment = (record: FragmentRecord) => {
+    const reference = {
+      id: `REF-${record.id}-${record.useCount + 1}`,
+      projectName: '2026年深圳市政务云平台采购项目',
+      materialName: '技术方案-总体架构',
+      referencedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+      referencedBy: '张明远',
+    }
+    setFragments(previous => previous.map(item => item.id === record.id ? {
+      ...item,
+      useCount: item.useCount + 1,
+      references: [reference, ...(item.references || [])],
+    } : item))
+    message.success(`已引用“${record.title}”，引用记录已写入审计轨迹`)
+  }
+
+  const deleteFragment = (record: FragmentRecord) => {
+    setFragments(previous => previous.filter(item => item.id !== record.id))
+    message.success(`已删除“${record.title}”`)
   }
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
+    <main className="p-4 sm:p-6" data-testid="fragment-library-page">
+      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-[#1E293B]">文档片段库</h1>
-          <p className="text-sm text-[#64748B] mt-0.5">管理产品手册、实施方案、解决方案等文档片段，AI生成标书时自动引用匹配</p>
+          <p className="mt-1 text-sm text-[#64748B]">按关键词或语义检索可复用内容，完整记录版本与项目引用</p>
         </div>
-        <Button onClick={() => setUploadOpen(true)} type="primary" icon={<Plus size={14} />}>上传文档片段</Button>
+        <PermissionGate permissions={permissions} require="library:write">
+          <Button type="primary" icon={<Plus size={14} />} onClick={() => openEditor()}>新增文档片段</Button>
+        </PermissionGate>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-        <div className="bg-white rounded-xl border border-[#E2E8F0] p-4">
-          <div className="text-2xl font-semibold text-[#1E293B]">{fragments.length}</div>
-          <div className="text-xs text-[#64748B]">文档片段总数</div>
-        </div>
-        <div className="bg-white rounded-xl border border-[#E2E8F0] p-4">
-          <div className="text-2xl font-semibold text-[#2563EB]">{new Set(fragments.map(f => f.category)).size}</div>
-          <div className="text-xs text-[#64748B]">分类数</div>
-        </div>
-        <div className="bg-white rounded-xl border border-[#E2E8F0] p-4">
-          <div className="text-2xl font-semibold text-[#16A34A]">{fragments.reduce((sum, f) => sum + f.useCount, 0)}</div>
-          <div className="text-xs text-[#64748B]">总引用次数</div>
-        </div>
-        <div className="bg-white rounded-xl border border-[#E2E8F0] p-4">
-          <div className="text-2xl font-semibold text-[#EA580C]">{aiMatchedIds.length}</div>
-          <div className="text-xs text-[#64748B]">AI推荐匹配</div>
-        </div>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          ['片段总数', normalized.length, '#1E293B'],
+          ['内容分类', new Set(normalized.map(record => record.category)).size, '#2563EB'],
+          ['累计引用', normalized.reduce((sum, record) => sum + record.useCount, 0), '#16A34A'],
+          ['已记录版本', normalized.reduce((sum, record) => sum + Math.max(1, record.versions?.length || 0), 0), '#7C3AED'],
+        ].map(([label, value, color]) => <div key={String(label)} className="rounded-xl border border-[#E2E8F0] bg-white p-4"><div className="text-2xl font-semibold" style={{ color: String(color) }}>{value}</div><div className="text-xs text-[#64748B]">{label}</div></div>)}
       </div>
 
-      {/* Category tabs + search */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4">
-        <div className="flex items-center gap-2 overflow-x-auto">
-          {fragmentCategories.map(c => (
-            <button
-              key={c}
-              onClick={() => setCategory(c)}
-              className={`px-3 py-1.5 text-xs rounded-lg transition-colors whitespace-nowrap ${
-                category === c
-                  ? 'bg-[#2563EB] text-white font-medium'
-                  : 'bg-white text-[#64748B] border border-[#E2E8F0] hover:bg-[#F8FAFC]'
-              }`}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <Segmented
-            size="small"
-            value={searchMode}
-            onChange={value => setSearchMode(value as 'keyword' | 'semantic')}
-            options={[{ label: '关键词', value: 'keyword' }, { label: 'AI语义推荐', value: 'semantic' }]}
-          />
-          <Input
-            allowClear
-            size="small"
-            prefix={<Search size={14} className="text-[#94A3B8]" />}
-            placeholder={searchMode === 'keyword' ? '全文搜索' : '输入当前项目需求'}
-            value={keyword}
-            onChange={e => setKeyword(e.target.value)}
-            className="w-56"
-          />
-        </div>
-      </div>
+      <FilterBar resultCount={filtered.length} onReset={resetFilters}>
+        <Segmented value={searchMode} onChange={value => { setSearchMode(value as 'keyword' | 'semantic'); setPage(1) }} options={[{ value: 'keyword', label: '关键词检索' }, { value: 'semantic', label: 'AI 语义检索', icon: <Sparkles size={13} /> }]} />
+        <Input allowClear prefix={<Search size={14} />} placeholder={searchMode === 'semantic' ? '描述需要生成的内容，如“政务云等保安全方案”' : '搜索标题、正文、标签或来源'} value={query} onChange={event => { setQuery(event.target.value); setPage(1) }} className="w-full md:!w-96" />
+        <Select value={category} onChange={value => { setCategory(value); setPage(1) }} options={fragmentCategories.map(value => ({ value, label: value }))} className="w-32" />
+      </FilterBar>
 
-      {/* Fragment cards grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {filtered.map(f => {
-          const Icon = categoryIcons[f.category] || FileText
-          const isAiMatched = aiMatchedIds.includes(f.id)
+      {searchMode === 'semantic' && !query.trim() && <div className="mb-4 rounded-xl border border-[#BFDBFE] bg-[#EFF6FF] p-3 text-sm text-[#1D4ED8]">输入一段业务需求后，系统会显示匹配度、命中主题和推荐理由。</div>}
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {paged.items.map(record => {
+          const Icon = categoryIcons[record.category] || FileText
           return (
-            <div
-              key={f.id}
-              className="bg-white rounded-xl border border-[#E2E8F0] p-4 hover:shadow-md hover:border-[#2563EB] transition-all cursor-pointer group"
-            >
-              {/* Card header */}
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-[#EFF6FF] flex items-center justify-center flex-shrink-0">
-                    <Icon size={16} color="#2563EB" />
-                  </div>
-                  <div>
-                    <Tag className="border-0 bg-[#F1F5F9] text-[#64748B] text-xs rounded">{f.category}</Tag>
-                  </div>
-                </div>
-                {isAiMatched && (
-                  <Tag className="border-0 bg-[#FFFBEB] text-[#EA580C] text-xs rounded flex items-center gap-1">
-                    <Zap size={10} /> AI推荐 {matchScores[f.id]}%
-                  </Tag>
-                )}
+            <article key={record.id} className="group flex min-h-[310px] flex-col rounded-xl border border-[#E2E8F0] bg-white p-4 transition-all hover:border-[#93C5FD] hover:shadow-md" data-testid="fragment-card">
+              <div className="mb-3 flex items-start justify-between gap-2">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#EFF6FF]"><Icon size={17} className="text-[#2563EB]" /></span>
+                <div className="flex items-center gap-1"><Tag bordered={false}>{record.category}</Tag>{searchMode === 'semantic' && record.matchScore !== undefined && <Tag color={record.matchScore >= 80 ? 'green' : 'blue'} icon={<Sparkles size={10} />}>{record.matchScore}%</Tag>}</div>
               </div>
-
-              {/* Title */}
-              <div className="text-sm font-medium text-[#1E293B] mb-2 group-hover:text-[#2563EB] transition-colors">
-                {f.title}
+              <h2 className="mb-2 text-sm font-semibold text-[#1E293B] group-hover:text-[#2563EB]">{record.title}</h2>
+              <p className="mb-3 line-clamp-3 text-xs leading-6 text-[#64748B]">{record.preview}</p>
+              {searchMode === 'semantic' && record.matchReason && <div className="mb-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-2 text-xs leading-5 text-[#92400E]">推荐理由：{record.matchReason}</div>}
+              <div className="mb-3 flex flex-wrap gap-1">{record.tags.map(tag => <span key={tag} className="rounded bg-[#F1F5F9] px-2 py-0.5 text-xs text-[#64748B]">{tag}</span>)}</div>
+              <div className="mt-auto rounded-lg bg-[#F8FAFC] p-2.5 text-xs text-[#64748B]"><div className="flex justify-between gap-2"><span className="truncate">来源：{record.source}</span><Tag className="!m-0">{record.version}</Tag></div><div className="mt-2 flex items-center justify-between"><span className="flex items-center gap-1"><TrendingUp size={11} />引用 {record.useCount} 次</span><span className="flex items-center gap-1"><Clock size={11} />{record.updatedAt}</span></div></div>
+              <div className="mt-3 flex flex-wrap items-center justify-end gap-1 border-t border-[#F1F5F9] pt-3">
+                <FilePreview file={{ name: record.title, version: record.version, source: record.source, updatedAt: record.updatedAt, content: record.content }} />
+                <Button type="link" size="small" icon={<Quote size={12} />} onClick={() => referenceFragment(record)}>引用</Button>
+                <Button type="text" size="small" icon={<TrendingUp size={12} />} onClick={() => setReferenceRecord(record)}>引用记录</Button>
+                <Button type="text" size="small" icon={<History size={12} />} onClick={() => setHistoryRecord(record)}>版本</Button>
+                <PermissionGate permissions={permissions} require="library:write">
+                  <Button type="text" size="small" onClick={() => openEditor(record)}>编辑</Button>
+                  <ConfirmAction title={`删除“${record.title}”？`} description="删除后历史项目仍保留已引用内容，但不能再次引用该片段。" danger onConfirm={() => deleteFragment(record)} buttonProps={{ type: 'text', size: 'small', icon: <Trash2 size={12} />, 'aria-label': `删除 ${record.title}` }}>删除</ConfirmAction>
+                </PermissionGate>
               </div>
-
-              {/* Preview */}
-              <div className="text-xs text-[#64748B] leading-relaxed mb-3 line-clamp-3">
-                {f.preview}
-              </div>
-
-              {/* Tags */}
-              <div className="flex flex-wrap gap-1 mb-3">
-                {f.tags.map((tag: string) => (
-                  <span key={tag} className="text-xs text-[#94A3B8] bg-[#F8FAFC] px-1.5 py-0.5 rounded">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-
-              {/* Footer */}
-              <div className="mb-3 rounded-lg bg-[#F8FAFC] px-2.5 py-2 text-xs text-[#64748B] flex items-center justify-between gap-2">
-                <span className="truncate">来源：{f.source || f.fileName || '片段库迁移'}</span>
-                <Tag className="!m-0 !text-xs">{f.version || 'v1.0'}</Tag>
-              </div>
-              <div className="flex items-center justify-between pt-3 border-t border-[#F8FAFC]">
-                <div className="flex items-center gap-3 text-xs text-[#94A3B8]">
-                  <span className="flex items-center gap-1">
-                    <TrendingUp size={11} />
-                    引用 {f.useCount} 次
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Clock size={11} />
-                    {f.updatedAt}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button onClick={() => Modal.info({ title: f.title, width: 680, okText: '关闭', content: <div className="space-y-3 text-sm"><div className="grid grid-cols-2 gap-2 rounded-lg bg-[#F8FAFC] p-3 text-xs text-[#64748B]"><span>来源：{f.source || f.fileName || '片段库迁移'}</span><span>版本：{f.version || 'v1.0'}</span><span>更新时间：{f.updatedAt}</span><span>引用次数：{f.useCount}</span></div>{isAiMatched && <div className="rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3 text-xs text-[#92400E]">AI 推荐匹配度 {matchScores[f.id]}%：与当前项目的技术方向、交付内容及关键词高度相关，引用前仍建议人工确认适用范围。</div>}<div className="flex gap-1">{f.tags.map((tag: string) => <Tag key={tag}>{tag}</Tag>)}</div><p className="leading-7 text-[#475569]">{f.preview}</p></div> })} type="text" size="small" className="text-xs h-6">预览</Button>
-                  <Button onClick={() => referenceFragment(f)} type="text" size="small" className="text-xs h-6">引用</Button>
-                </div>
-              </div>
-            </div>
+            </article>
           )
         })}
       </div>
 
-      {filtered.length === 0 && (
-        <div className="py-16">
-          <Empty description="未找到匹配的文档片段" />
-        </div>
-      )}
+      {!paged.items.length && <div className="rounded-xl border border-[#E2E8F0] bg-white"><EmptyState title="未找到匹配片段" description="换一个检索描述或清除分类条件后再试。" action={<Button onClick={resetFilters}>清除筛选</Button>} /></div>}
+      {filtered.length > 0 && <div className="mt-4 flex justify-end"><Pagination current={paged.page} pageSize={pageSize} total={filtered.length} showSizeChanger pageSizeOptions={[6, 9, 18]} showTotal={total => `共 ${total} 条`} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) }} /></div>}
 
-      <Modal title="上传文档片段" open={uploadOpen} onCancel={() => { setUploadOpen(false); form.resetFields(); setSelectedFile('') }} onOk={saveFragment} okText="上传并索引" cancelText="取消">
-        <Form form={form} layout="vertical" className="pt-3">
-          <Form.Item name="title" label="片段标题" rules={[{ required: true, message: '请输入片段标题' }]}><Input /></Form.Item>
-          <Form.Item name="category" label="分类" rules={[{ required: true }]}><Select options={fragmentCategories.filter(item => item !== '全部').map(value => ({ value, label: value }))} /></Form.Item>
-          <Form.Item name="tags" label="标签"><Input placeholder="云平台，实施，政务" /></Form.Item>
-          <Form.Item name="preview" label="内容摘要" rules={[{ required: true, message: '请输入内容摘要' }]}><Input.TextArea rows={4} /></Form.Item>
-          <Upload showUploadList={false} beforeUpload={(file) => { setSelectedFile(file.name); return false }}><Button icon={<Plus size={14} />}>{selectedFile || '选择源文档'}</Button></Upload>
+      <Modal title={editing ? '编辑文档片段' : '新增文档片段'} open={editorOpen} onCancel={() => { setEditorOpen(false); setEditing(null); form.resetFields() }} onOk={saveFragment} okText="保存并索引" cancelText="取消" width={720}>
+        <Form form={form} layout="vertical" className="pt-3" requiredMark={false}>
+          <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+            <Form.Item name="title" label="片段标题" rules={[{ required: true, message: '请输入片段标题' }]}><Input /></Form.Item>
+            <Form.Item name="category" label="分类" rules={[{ required: true }]}><Select options={fragmentCategories.filter(value => value !== '全部').map(value => ({ value, label: value }))} /></Form.Item>
+            <Form.Item name="source" label="来源" rules={[{ required: true, message: '请输入来源' }]}><Input placeholder="产品白皮书 / 手工录入" /></Form.Item>
+            <Form.Item name="fileName" label="源文件"><Input placeholder="可选：solution.docx" /></Form.Item>
+          </div>
+          <Form.Item name="tags" label="标签"><Input placeholder="使用逗号分隔，例如：云平台，安全，等保" /></Form.Item>
+          <Form.Item name="preview" label="内容摘要" rules={[{ required: true, message: '请输入内容摘要' }]}><Input.TextArea rows={3} maxLength={240} showCount /></Form.Item>
+          <Form.Item name="content" label="片段正文" rules={[{ required: true, message: '请输入片段正文' }]}><Input.TextArea rows={6} /></Form.Item>
+          {editing && <Form.Item name="createNewVersion" label="保存为新版本" valuePropName="checked"><Switch /></Form.Item>}
+          <Form.Item name="changeNote" label="变更说明" rules={[{ required: Boolean(editing), message: '请填写变更说明' }]}><Input placeholder="说明内容调整原因" /></Form.Item>
         </Form>
       </Modal>
-    </div>
+
+      <Modal title={`${historyRecord?.title || ''} · 版本历史`} open={Boolean(historyRecord)} onCancel={() => setHistoryRecord(null)} footer={<Button onClick={() => setHistoryRecord(null)}>关闭</Button>} width={760}>
+        <Table rowKey={(record) => `${record.version}-${record.createdAt}`} pagination={false} dataSource={historyRecord?.versions?.length ? historyRecord.versions : [{ version: historyRecord?.version || 'v1.0', fileName: historyRecord?.fileName || '-', changeNote: '初始版本', createdAt: historyRecord?.updatedAt || '历史导入', createdBy: '系统' }]} columns={[{ title: '版本', dataIndex: 'version' }, { title: '源文件', dataIndex: 'fileName' }, { title: '变更说明', dataIndex: 'changeNote' }, { title: '更新时间', dataIndex: 'createdAt' }, { title: '操作人', dataIndex: 'createdBy' }]} />
+        <Button className="mt-4" type="primary" onClick={() => { const record = historyRecord; setHistoryRecord(null); if (record) openEditor(record, true) }}>上传新版本</Button>
+      </Modal>
+
+      <Modal title={`${referenceRecord?.title || ''} · 引用记录`} open={Boolean(referenceRecord)} onCancel={() => setReferenceRecord(null)} footer={<Button onClick={() => setReferenceRecord(null)}>关闭</Button>} width={760}>
+        <Table rowKey="id" pagination={{ pageSize: 5 }} locale={{ emptyText: '暂无详细引用记录；历史累计次数已保留' }} dataSource={referenceRecord?.references || []} columns={[{ title: '项目', dataIndex: 'projectName' }, { title: '材料', dataIndex: 'materialName' }, { title: '引用时间', dataIndex: 'referencedAt' }, { title: '操作人', dataIndex: 'referencedBy' }]} />
+      </Modal>
+    </main>
   )
 }

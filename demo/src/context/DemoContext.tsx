@@ -1,12 +1,13 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import {
   tasks as initialBidTasks,
   materials as initialMaterials,
   qualifications as initialQualifications,
   fragments as initialFragments,
   users as initialUsers,
+  notifications as initialBidNotifications,
 } from '../mock/data'
-import { evaluationTasks as initialEvaluationTasks } from '../mock/evaluationData'
+import { evaluationTasks as initialEvaluationTasks, evalNotifications as initialEvaluationNotifications } from '../mock/evaluationData'
 
 type DemoContextValue = {
   loggedIn: boolean
@@ -28,12 +29,17 @@ type DemoContextValue = {
   setFragments: React.Dispatch<React.SetStateAction<any[]>>
   users: any[]
   setUsers: React.Dispatch<React.SetStateAction<any[]>>
+  appNotifications: any[]
+  markNotificationRead: (id: string) => void
+  markAllNotificationsRead: () => void
+  permissions: string[]
   resetDemoData: () => void
 }
 
 const DemoContext = createContext<DemoContextValue | null>(null)
 
 const STORAGE_KEY = 'bid-platform-demo-state-v2'
+const DEMO_PERMISSIONS = ['*', 'admin:read', 'admin:write', 'library:read', 'library:write', 'settings:write']
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value))
@@ -41,6 +47,13 @@ function clone<T>(value: T): T {
 
 function buildInitialMaterials() {
   return Object.fromEntries(initialBidTasks.map(task => [task.id, clone(initialMaterials)]))
+}
+
+function buildInitialNotifications() {
+  return [
+    ...initialEvaluationNotifications.map(item => ({ ...clone(item), source: 'eval' as const })),
+    ...initialBidNotifications.map(item => ({ ...clone(item), source: 'bid' as const })),
+  ]
 }
 
 function readStoredState() {
@@ -61,6 +74,7 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
   const [qualifications, setQualifications] = useState<any[]>(stored?.qualifications || clone(initialQualifications))
   const [fragments, setFragments] = useState<any[]>(stored?.fragments || clone(initialFragments))
   const [users, setUsers] = useState<any[]>(stored?.users || clone(initialUsers))
+  const [appNotifications, setAppNotifications] = useState<any[]>(stored?.appNotifications || buildInitialNotifications())
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -70,8 +84,9 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
       qualifications,
       fragments,
       users,
+      appNotifications,
     }))
-  }, [bidTasks, taskMaterials, evaluationTasks, qualifications, fragments, users])
+  }, [bidTasks, taskMaterials, evaluationTasks, qualifications, fragments, users, appNotifications])
 
   const login = () => {
     sessionStorage.setItem('bid-demo-logged-in', 'true')
@@ -92,10 +107,10 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     setBidTasks(prev => prev.map(task => task.id === id ? { ...task, ...patch } : task))
   }
 
-  const getTaskMaterials = (id?: string) => {
+  const getTaskMaterials = useCallback((id?: string) => {
     if (!id) return clone(initialMaterials)
     return taskMaterials[id] || clone(initialMaterials)
-  }
+  }, [taskMaterials])
 
   const updateTaskMaterial = (taskId: string, materialId: string, patch: Record<string, any>) => {
     setTaskMaterials(prev => ({
@@ -123,6 +138,14 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     setEvaluationTasks(prev => prev.map(task => task.id === id ? { ...task, ...patch } : task))
   }
 
+  const markNotificationRead = (id: string) => {
+    setAppNotifications(prev => prev.map(item => item.id === id ? { ...item, isRead: true } : item))
+  }
+
+  const markAllNotificationsRead = () => {
+    setAppNotifications(prev => prev.map(item => ({ ...item, isRead: true })))
+  }
+
   const resetDemoData = () => {
     setBidTasks(clone(initialBidTasks))
     setTaskMaterials(buildInitialMaterials())
@@ -130,6 +153,7 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     setQualifications(clone(initialQualifications))
     setFragments(clone(initialFragments))
     setUsers(clone(initialUsers))
+    setAppNotifications(buildInitialNotifications())
     localStorage.removeItem(STORAGE_KEY)
     localStorage.removeItem('bid-platform-evaluation-draft-v2')
     for (const id of ['S01', 'S02', 'S03', 'S04']) localStorage.removeItem(`supplier-portal-draft-${id}`)
@@ -155,8 +179,12 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     setFragments,
     users,
     setUsers,
+    appNotifications,
+    markNotificationRead,
+    markAllNotificationsRead,
+    permissions: DEMO_PERMISSIONS,
     resetDemoData,
-  }), [loggedIn, bidTasks, taskMaterials, evaluationTasks, qualifications, fragments, users])
+  }), [loggedIn, bidTasks, evaluationTasks, qualifications, fragments, users, appNotifications, getTaskMaterials])
 
   return <DemoContext.Provider value={value}>{children}</DemoContext.Provider>
 }

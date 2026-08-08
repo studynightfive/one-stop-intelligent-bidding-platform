@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Table, Tag, Avatar, Button, Input, Segmented, Card, Modal, Select, Tooltip, Form, message, Dropdown, Empty } from 'antd'
-import { UserPlus, Search, ShieldCheck, Users as UsersIcon, UserCheck, MoreHorizontal, Mail, Ban, History, Building2 } from 'lucide-react'
+import { Table, Tag, Avatar, Button, Input, Segmented, Card, Modal, Select, Tooltip, Form, message, Dropdown, Empty, Drawer, Descriptions, Timeline } from 'antd'
+import { UserPlus, Search, ShieldCheck, Users as UsersIcon, UserCheck, MoreHorizontal, Mail, Ban, History, Building2, Send, FolderKanban, KeyRound } from 'lucide-react'
 import { roleMap, permissionMatrix } from '../mock/data'
 import type { ColumnsType } from 'antd/es/table'
 import { useDemo } from '../context/DemoContext'
@@ -19,6 +19,8 @@ export default function UserPermissions() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeTab, setActiveTab] = useState<'users' | 'roles'>('users')
   const [editingUser, setEditingUser] = useState<any>(null)
+  const [drawerUser, setDrawerUser] = useState<any>(null)
+  const [drawerTab, setDrawerTab] = useState<'projects' | 'activity'>('projects')
   const [form] = Form.useForm()
 
   const stats = [
@@ -39,7 +41,7 @@ export default function UserPermissions() {
 
   const openUserForm = (user?: any) => {
     setEditingUser(user || null)
-    form.setFieldsValue(user || { role: 'member', department: '投标部', status: 'active' })
+    form.setFieldsValue(user || { role: 'member', department: '投标部', status: 'inactive' })
     setShowAddModal(true)
   }
 
@@ -56,6 +58,9 @@ export default function UserPermissions() {
       avatar: values.name.slice(0, 2).toUpperCase(),
       projects: editingUser?.projects || 0,
       lastLogin: editingUser?.lastLogin || '尚未登录',
+      status: editingUser ? values.status : 'inactive',
+      invitationStatus: editingUser ? editingUser.invitationStatus || 'accepted' : 'pending',
+      invitedAt: editingUser?.invitedAt || new Date().toLocaleString('zh-CN', { hour12: false }),
     }
     setUsers(prev => editingUser ? prev.map(item => item.id === editingUser.id ? user : item) : [user, ...prev])
     setShowAddModal(false)
@@ -78,12 +83,15 @@ export default function UserPermissions() {
     })
   }
 
-  const showUserLogs = (record: any) => Modal.info({
-    title: `${record.name} · 最近活动`,
-    width: 540,
-    content: <div className="mt-3 space-y-2 text-sm"><div className="rounded-lg bg-[#F8FAFC] p-3">{record.lastLogin} · 登录系统</div><div className="rounded-lg bg-[#F8FAFC] p-3">2026-08-03 16:20 · 查看项目材料</div><div className="rounded-lg bg-[#F8FAFC] p-3">2026-08-02 10:08 · 更新个人资料</div></div>,
-    okText: '关闭',
-  })
+  const openUserDrawer = (record: any, tab: 'projects' | 'activity') => {
+    setDrawerUser(record)
+    setDrawerTab(tab)
+  }
+
+  const resendInvitation = (record: any) => {
+    setUsers(previous => previous.map(item => item.id === record.id ? { ...item, invitationStatus: item.invitationStatus || 'accepted', invitationResentAt: new Date().toLocaleString('zh-CN', { hour12: false }) } : item))
+    message.success(`邀请邮件已重新发送至 ${record.email}`)
+  }
 
   const columns: ColumnsType<any> = [
     {
@@ -95,7 +103,7 @@ export default function UserPermissions() {
           <Avatar style={{ background: roleMap[record.role].color, fontSize: 13 }}>{record.avatar}</Avatar>
           <div>
             <div className="text-sm font-medium text-[#1E293B]">{record.name}</div>
-            <div className="text-xs text-[#94A3B8]">{record.email}</div>
+            <div className="flex items-center gap-1.5 text-xs text-[#94A3B8]">{record.email}{record.invitationStatus === 'pending' && <Tag color="gold" className="!m-0 !text-[10px]">待接受邀请</Tag>}</div>
           </div>
         </div>
       ),
@@ -124,7 +132,7 @@ export default function UserPermissions() {
       dataIndex: 'projects',
       key: 'projects',
       render: (count: number, record) => (
-        <button type="button" onClick={() => Modal.info({ title: `${record.name} 参与的项目`, content: count ? `当前参与 ${count} 个项目，包括投标任务与评标任务；Demo 暂以汇总信息展示。` : '当前未参与任何项目。', okText: '关闭' })} className="flex items-center gap-1.5 hover:text-[#2563EB]">
+        <button type="button" onClick={() => openUserDrawer(record, 'projects')} className="flex items-center gap-1.5 hover:text-[#2563EB]" aria-label={`查看 ${record.name} 参与的项目`}>
           <span className="text-sm font-medium text-[#1E293B]">{count}</span>
           <span className="text-xs text-[#94A3B8]">个</span>
         </button>
@@ -159,13 +167,15 @@ export default function UserPermissions() {
           <Dropdown
             trigger={['click']}
             menu={{ items: [
+              { key: 'resend', label: '重发邀请邮件', icon: <Send size={14} /> },
               { key: 'reset', label: '发送密码重置邮件', icon: <Mail size={14} /> },
               { key: 'status', label: record.status === 'active' ? '停用用户' : '启用用户', icon: <Ban size={14} />, danger: record.status === 'active' },
               { key: 'logs', label: '查看活动记录', icon: <History size={14} /> },
             ], onClick: ({ key }) => {
+              if (key === 'resend') resendInvitation(record)
               if (key === 'reset') Modal.confirm({ title: `向 ${record.name} 发送密码重置邮件？`, content: `重置链接将发送至 ${record.email}，不会在页面生成或展示临时密码。`, okText: '发送邮件', onOk: () => message.success('密码重置邮件已发送（Demo）') })
               if (key === 'status') toggleUserStatus(record)
-              if (key === 'logs') showUserLogs(record)
+              if (key === 'logs') openUserDrawer(record, 'activity')
             } }}
           >
             <Button type="text" size="small" icon={<MoreHorizontal size={16} />} aria-label="更多用户操作" />
@@ -176,7 +186,11 @@ export default function UserPermissions() {
   ]
 
   return (
-    <div className="p-6">
+    <main className="p-4 sm:p-6" data-testid="user-permissions-page">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold text-[#1E293B]">用户与权限</h1>
+        <p className="mt-1 text-sm text-[#64748B]">邀请成员、管理账号状态，并查看项目与活动审计记录</p>
+      </div>
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {stats.map(stat => {
@@ -255,7 +269,7 @@ export default function UserPermissions() {
               onClick={() => openUserForm()}
               className="!flex !items-center"
             >
-              添加用户
+              邀请用户
             </Button>
           </div>
 
@@ -340,11 +354,11 @@ export default function UserPermissions() {
 
       {/* Add user modal */}
       <Modal
-        title={editingUser ? '编辑用户' : '添加用户'}
+        title={editingUser ? '编辑用户' : '邀请用户'}
         open={showAddModal}
         onCancel={() => { setShowAddModal(false); setEditingUser(null); form.resetFields() }}
         onOk={saveUser}
-        okText={editingUser ? '保存' : '添加'}
+        okText={editingUser ? '保存' : '发送邀请'}
         cancelText="取消"
       >
         <Form form={form} layout="vertical" className="py-4">
@@ -360,10 +374,51 @@ export default function UserPermissions() {
               }))}
             /></Form.Item>
           <Form.Item name="department" label="部门" rules={[{ required: true }]}><Input placeholder="请输入所属部门" /></Form.Item>
-          <Form.Item name="status" label="状态"><Select options={[{ value: 'active', label: '活跃' }, { value: 'inactive', label: '未激活/停用' }]} /></Form.Item>
+          {editingUser
+            ? <Form.Item name="status" label="状态"><Select options={[{ value: 'active', label: '活跃' }, { value: 'inactive', label: '未激活/停用' }]} /></Form.Item>
+            : <div className="rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] p-3 text-xs leading-5 text-[#1D4ED8]">邀请发送后账号处于“待接受邀请 / 未激活”状态，成员完成邀请流程后再启用。</div>}
         </Form>
       </Modal>
-    </div>
+
+      <Drawer title={drawerUser ? `${drawerUser.name} · 用户详情` : '用户详情'} open={Boolean(drawerUser)} onClose={() => setDrawerUser(null)} width={620}>
+        {drawerUser && (
+          <div>
+            <Descriptions bordered size="small" column={2} className="mb-5">
+              <Descriptions.Item label="邮箱" span={2}>{drawerUser.email}</Descriptions.Item>
+              <Descriptions.Item label="部门">{drawerUser.department}</Descriptions.Item>
+              <Descriptions.Item label="角色">{roleMap[drawerUser.role]?.label}</Descriptions.Item>
+              <Descriptions.Item label="状态">{statusMap[drawerUser.status]?.label}</Descriptions.Item>
+              <Descriptions.Item label="最后登录">{drawerUser.lastLogin}</Descriptions.Item>
+            </Descriptions>
+            <Segmented
+              block
+              value={drawerTab}
+              onChange={value => setDrawerTab(value as 'projects' | 'activity')}
+              options={[{ value: 'projects', label: '参与项目', icon: <FolderKanban size={13} /> }, { value: 'activity', label: '活动记录', icon: <History size={13} /> }]}
+              className="mb-5"
+            />
+            {drawerTab === 'projects' ? (
+              drawerUser.projects ? <div className="space-y-3">{[
+                ['2026年深圳市政务云平台采购项目', '投标任务', '项目负责人'],
+                ['智慧城市数据中台建设项目', '投标任务', '协作成员'],
+                ['华南数字化转型服务评标', '评标任务', '评审人'],
+              ].slice(0, Math.min(drawerUser.projects, 3)).map(([name, type, role]) => <div key={name} className="rounded-xl border border-[#E2E8F0] p-4"><div className="font-medium text-[#1E293B]">{name}</div><div className="mt-2 flex gap-2"><Tag>{type}</Tag><Tag color="blue">{role}</Tag></div></div>)}</div> : <Empty description="当前未参与任何项目" />
+            ) : (
+              <Timeline items={[
+                { color: 'blue', children: `${drawerUser.lastLogin} · 登录系统` },
+                { color: 'green', children: '2026-08-03 16:20 · 查看项目材料' },
+                { color: 'gray', children: '2026-08-02 10:08 · 更新个人资料' },
+                { color: 'gray', children: `${drawerUser.invitedAt || '2026-08-01 09:00'} · 账号邀请已创建` },
+              ]} />
+            )}
+            <div className="mt-5 flex gap-2">
+              <Button icon={<Send size={14} />} onClick={() => resendInvitation(drawerUser)}>重发邀请</Button>
+              <Button icon={<KeyRound size={14} />} onClick={() => message.success('密码重置邮件已发送')}>发送密码重置邮件</Button>
+            </div>
+          </div>
+        )}
+      </Drawer>
+    </main>
   )
 }
 

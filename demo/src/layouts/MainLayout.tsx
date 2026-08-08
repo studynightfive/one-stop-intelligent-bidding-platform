@@ -2,46 +2,39 @@ import { useEffect, useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, Badge, Button, Dropdown, Input, Layout, Modal, Segmented, Tooltip, message } from 'antd'
 import {
-  Bell, CheckCircle2, CheckSquare, ChevronRight, ClipboardCheck, FileStack,
-  Gavel, LayoutDashboard, Link2, Menu, PenLine, Plus, Search, Settings, Users, Zap,
+  Bell, CheckCircle2, CheckSquare, ChevronRight,
+  Menu, PenLine, Search, Zap,
 } from 'lucide-react'
-import { currentUser, notifications } from '../mock/data'
-import { evalNotifications } from '../mock/evaluationData'
+import type { LucideIcon } from 'lucide-react'
+import { currentUser } from '../mock/data'
 import { useDemo } from '../context/DemoContext'
+import { bidNavigation } from '../features/bids/navigation'
+import { adminNavigation } from '../features/admin/navigation'
+import { evaluationNavigation } from '../features/admin/evaluationBridge'
 
 const { Sider, Header, Content } = Layout
 
 type Mode = 'bid' | 'evaluation'
 
-const bidNavItems = [
-  { key: '/dashboard', label: '投标工作台', icon: LayoutDashboard, section: 'main' },
-  { key: '/admin/qualifications', label: '资质库管理', icon: ClipboardCheck, section: 'main' },
-  { key: '/admin/fragments', label: '文档片段库', icon: FileStack, section: 'main' },
-  { key: '/admin/users', label: '用户与权限', icon: Users, section: 'admin' },
-  { key: '/admin/settings', label: '系统设置', icon: Settings, section: 'admin' },
-]
-
-const evalNavItems = [
-  { key: '/evaluation', label: '评标工作台', icon: Gavel, section: 'main' },
-  { key: '/evaluation/create', label: '创建评标任务', icon: Plus, section: 'main' },
-  { key: '/evaluation/portal/EVAL-2026-001', label: '供应商门户（外部）', icon: Link2, section: 'main' },
-  { key: '/admin/users', label: '用户与权限', icon: Users, section: 'admin' },
-  { key: '/admin/settings', label: '系统设置', icon: Settings, section: 'admin' },
-]
+const bidNavItems = [...bidNavigation.filter(item => !item.hiddenInSidebar), ...adminNavigation]
+const evalNavItems = [...evaluationNavigation, ...adminNavigation.filter(item => item.section === 'admin')]
 
 export default function MainLayout() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { logout, bidTasks, evaluationTasks, resetDemoData } = useDemo()
+  const {
+    logout,
+    bidTasks,
+    evaluationTasks,
+    resetDemoData,
+    appNotifications,
+    markNotificationRead,
+    markAllNotificationsRead,
+  } = useDemo()
   const [collapsed, setCollapsed] = useState(false)
   const [mobile, setMobile] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const [allNotifications, setAllNotifications] = useState(() => {
-    const bidNotifs = notifications.map(item => ({ ...item, source: 'bid' as const }))
-    const evalNotifs = evalNotifications.map(item => ({ ...item, source: 'eval' as const }))
-    return [...evalNotifs, ...bidNotifs]
-  })
 
   const mode: Mode = location.pathname.startsWith('/evaluation') ? 'evaluation' : 'bid'
   const navItems = mode === 'bid' ? bidNavItems : evalNavItems
@@ -57,7 +50,7 @@ export default function MainLayout() {
     return location.pathname.startsWith(item.key)
   })
 
-  const unreadCount = allNotifications.filter(item => !item.isRead).length
+  const unreadCount = appNotifications.filter(item => !item.isRead).length
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -125,11 +118,11 @@ export default function MainLayout() {
 
   const notificationMenu = {
     onClick: ({ key }: { key: string }) => {
-      if (key === 'mark-all') setAllNotifications(items => items.map(item => ({ ...item, isRead: true })))
-      else setAllNotifications(items => items.map(item => item.id === key ? { ...item, isRead: true } : item))
+      if (key === 'mark-all') markAllNotificationsRead()
+      else markNotificationRead(key)
     },
     items: [
-      ...allNotifications.slice(0, 6).map(item => ({
+      ...appNotifications.slice(0, 6).map(item => ({
         key: item.id,
         label: (
           <div className="py-1 max-w-xs">
@@ -196,7 +189,7 @@ export default function MainLayout() {
               key={item.key}
               icon={item.icon}
               label={item.label}
-              active={item.key === '/evaluation' ? isEvaluationWorkPath : location.pathname.startsWith(item.key)}
+              active={currentNav?.key === item.key}
               collapsed={collapsed}
               onClick={() => goTo(item.key)}
             />
@@ -207,7 +200,7 @@ export default function MainLayout() {
               key={item.key}
               icon={item.icon}
               label={item.label}
-              active={location.pathname.startsWith(item.key)}
+              active={currentNav?.key === item.key}
               collapsed={collapsed}
               onClick={() => goTo(item.key)}
             />
@@ -221,6 +214,15 @@ export default function MainLayout() {
           </div>
         )}
       </Sider>
+
+      {mobile && !collapsed && (
+        <button
+          type="button"
+          aria-label="关闭导航遮罩"
+          className="fixed inset-0 z-20 bg-slate-950/30 lg:hidden"
+          onClick={() => setCollapsed(true)}
+        />
+      )}
 
       <Layout>
         <Header
@@ -296,7 +298,7 @@ export default function MainLayout() {
 }
 
 function NavButton({ icon: Icon, label, active, collapsed, onClick }: {
-  icon: any
+  icon: LucideIcon
   label: string
   active: boolean
   collapsed: boolean
@@ -307,6 +309,7 @@ function NavButton({ icon: Icon, label, active, collapsed, onClick }: {
       type="button"
       onClick={onClick}
       title={collapsed ? label : undefined}
+      aria-current={active ? 'page' : undefined}
       className={`flex items-center gap-3 mx-3 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors mb-0.5 ${
         active ? 'bg-[#EFF6FF] text-[#2563EB] font-medium' : 'text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#1E293B]'
       }`}
