@@ -15,7 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from app.core import dependencies
+from app.core import database, dependencies
 from app.core.config import settings
 from app.core.errors import (
     AiProviderUnavailableError,
@@ -243,6 +243,15 @@ async def test_portal_and_database_dependencies(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(dependencies, "get_db", fake_get_db)
     yielded = [item async for item in dependencies.get_db_session()]
     assert yielded == [session]
+
+    monkeypatch.setattr(
+        settings,
+        "database_url",
+        "postgresql+asyncpg://user@localhost:5432/platform",
+    )
+    engine = database._create_async_engine()
+    assert type(engine.pool).__name__ == "AsyncAdaptedQueuePool"
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

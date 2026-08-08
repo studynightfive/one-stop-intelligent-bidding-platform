@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.models_registry import Base as Base
@@ -35,10 +35,9 @@ def _create_async_engine() -> AsyncEngine:
             future=True,
         )
 
-    # PostgreSQL 使用 QueuePool
+    # 异步引擎会自动选择 AsyncAdaptedQueuePool；同步 QueuePool 与 asyncio 不兼容。
     return create_async_engine(
         settings.database_url,
-        poolclass=QueuePool,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
         pool_pre_ping=True,
