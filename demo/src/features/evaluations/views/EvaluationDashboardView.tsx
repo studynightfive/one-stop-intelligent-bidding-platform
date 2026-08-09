@@ -1,12 +1,12 @@
-import { useState } from 'react'
-import { Table, Tag, Avatar, Segmented, Card, Progress, Button, Input, Select, Empty, Modal, Tooltip } from 'antd'
+import { useEffect, useState } from 'react'
+import { Table, Tag, Avatar, Segmented, Card, Progress, Button, Input, Select, Empty, Modal, Tooltip, Alert } from 'antd'
 import { AlertTriangle, Gavel, Bot, Plus, Link2, Clock, Search, RotateCcw } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
-import { evalStatusMap } from '../../../mock/evaluationData'
 import type { ColumnsType } from 'antd/es/table'
-import { useDemo } from '../../../context/DemoContext'
-import { EVAL_TEST_IDS } from '../constants'
+import { fetchEvaluationStats, fetchEvaluationTasks, toEvaluationTaskSummary } from '../api'
+import type { EvaluationTaskSummary } from '../types'
+import { EVAL_STATUS_META, EVAL_TEST_IDS } from '../constants'
 
 const filterTabs = [
   { label: '全部', value: 'all' },
@@ -19,11 +19,37 @@ const filterTabs = [
 
 export default function EvaluationDashboard() {
   const navigate = useNavigate()
-  const { evaluationTasks } = useDemo()
   const [filter, setFilter] = useState('all')
   const [viewMode, setViewMode] = useState<'table' | 'board'>('table')
   const [keyword, setKeyword] = useState('')
   const [assignee, setAssignee] = useState('all')
+  const [evaluationTasks, setEvaluationTasks] = useState<EvaluationTaskSummary[]>([])
+  const [stats, setStats] = useState({ total: 0, collecting: 0, aiReview: 0, humanReview: 0, completed: 0, risk: 0 })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      fetchEvaluationStats(),
+      fetchEvaluationTasks({ page: 1, pageSize: 100 }),
+    ])
+      .then(([statsData, taskData]) => {
+        if (cancelled) return
+        setStats(statsData)
+        setEvaluationTasks(taskData.map(toEvaluationTaskSummary))
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : '加载评标任务失败')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reloadKey])
 
   const filteredTasks = evaluationTasks.filter(task => {
     const normalized = keyword.trim().toLowerCase()
@@ -31,17 +57,17 @@ export default function EvaluationDashboard() {
       && (assignee === 'all' || task.assignee === assignee)
       && (!normalized || [task.projectName, task.tenderNo, task.tenderEntity].some(value => String(value).toLowerCase().includes(normalized)))
   })
-  const stats = [
-    { label: '评标任务总数', value: evaluationTasks.length, icon: Gavel, color: '#2563EB', bg: '#EFF6FF', filter: 'all' },
-    { label: '材料收集中', value: evaluationTasks.filter(t => t.status === 'collecting').length, icon: Clock, color: '#0891B2', bg: '#ECFEFF', filter: 'collecting' },
-    { label: 'AI初审中', value: evaluationTasks.filter(t => t.status === 'ai_review').length, icon: Bot, color: '#7C3AED', bg: '#F5F3FF', filter: 'ai_review' },
-    { label: '废标预警', value: 1, icon: AlertTriangle, color: '#DC2626', bg: '#FEF2F2', filter: 'risk' },
+  const statsCards = [
+    { label: '评标任务总数', value: stats.total, icon: Gavel, color: '#2563EB', bg: '#EFF6FF', filter: 'all' },
+    { label: '材料收集中', value: stats.collecting, icon: Clock, color: '#0891B2', bg: '#ECFEFF', filter: 'collecting' },
+    { label: 'AI初审中', value: stats.aiReview, icon: Bot, color: '#7C3AED', bg: '#F5F3FF', filter: 'ai_review' },
+    { label: '废标预警', value: stats.risk, icon: AlertTriangle, color: '#DC2626', bg: '#FEF2F2', filter: 'risk' },
   ]
 
   const assignees = Array.from(new Set(evaluationTasks.map(task => task.assignee)))
   const deadlineDays = (date: string) => dayjs(date).startOf('day').diff(dayjs().startOf('day'), 'day')
   const relativeDeadline = (record: any) => {
-    if (record.status === 'completed' || record.status === 'closed') return evalStatusMap[record.status].label
+    if (record.status === 'completed' || record.status === 'closed') return EVAL_STATUS_META[record.status]?.label || record.status
     const days = deadlineDays(record.deadline)
     if (days < 0) return `已逾期 ${Math.abs(days)} 天`
     if (days === 0) return '今天截止'
@@ -51,18 +77,25 @@ export default function EvaluationDashboard() {
     const value = Number(String(budget).replace(/,/g, ''))
     return value >= 10000 ? `¥${(value / 10000).toLocaleString('zh-CN', { maximumFractionDigits: 2 })} 万` : `¥${budget}`
   }
-  const showRisk = () => Modal.warning({
-    title: '废标风险下钻',
-    width: 620,
-    okText: '前往人工复核',
-    onOk: () => navigate('/evaluation/EVAL-2026-001'),
-    content: (
-      <div className="mt-3 space-y-2">
-        <div className="rounded-lg bg-[#FEF2F2] border border-[#FECACA] p-3"><div className="font-medium text-[#991B1B]">北京华信科技 · 高风险</div><div className="text-xs text-[#64748B] mt-1">报价超过预算，且证书编号、业绩合同编号存在异常，需人工确认后才能形成结论。</div></div>
-        <div className="text-xs text-[#64748B]">AI 预警仅提供复核线索，不会自动执行废标。</div>
-      </div>
-    ),
-  })
+  const showRisk = () => {
+    const riskTask = evaluationTasks.find(task => task.riskCount > 0)
+    if (!riskTask) return
+    Modal.warning({
+      title: '废标风险下钻',
+      width: 620,
+      okText: '前往人工复核',
+      onOk: () => navigate(`/evaluation/${riskTask.id}`),
+      content: (
+        <div className="mt-3 space-y-2">
+          <div className="rounded-lg bg-[#FEF2F2] border border-[#FECACA] p-3">
+            <div className="font-medium text-[#991B1B]">{riskTask.projectName} · {riskTask.riskCount} 项风险</div>
+            <div className="text-xs text-[#64748B] mt-1">风险项需要进入任务详情人工确认后才能形成结论。</div>
+          </div>
+          <div className="text-xs text-[#64748B]">AI 预警仅提供复核线索，不会自动执行废标。</div>
+        </div>
+      ),
+    })
+  }
 
   const columns: ColumnsType<any> = [
     {
@@ -71,7 +104,7 @@ export default function EvaluationDashboard() {
       key: 'status',
       width: 100,
       render: (status: string) => {
-        const s = evalStatusMap[status]
+        const s = EVAL_STATUS_META[status] || { label: status, color: 'default', step: '-' }
         return <Tag color={s.color} className="!text-xs">{s.label}</Tag>
       },
     },
@@ -125,7 +158,7 @@ export default function EvaluationDashboard() {
       render: (_, record) => (
         <div>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-[#64748B]">{evalStatusMap[record.status].step}</span>
+            <span className="text-xs text-[#64748B]">{EVAL_STATUS_META[record.status]?.step || record.status}</span>
             <span className="text-xs font-medium text-[#1E293B]">{record.progress}%</span>
           </div>
           <Tooltip title="评审进度按材料收集、AI 初审、人工复审和结果发布阶段综合计算">
@@ -158,7 +191,7 @@ export default function EvaluationDashboard() {
     <div data-testid={EVAL_TEST_IDS.dashboard} className="p-6">
       {/* Stats */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        {stats.map(stat => {
+        {statsCards.map(stat => {
           const Icon = stat.icon
           return (
             <Card
@@ -180,6 +213,16 @@ export default function EvaluationDashboard() {
           )
         })}
       </div>
+
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          message={error}
+          className="mb-4"
+          action={<Button size="small" onClick={() => { setLoading(true); setError(''); setReloadKey(value => value + 1) }}>重试</Button>}
+        />
+      )}
 
       {/* Toolbar */}
       <div className="bg-white border border-[#E2E8F0] rounded-xl p-3 mb-4 flex flex-col md:flex-row md:items-center gap-2">
@@ -221,7 +264,9 @@ export default function EvaluationDashboard() {
       </div>
 
       {/* Content */}
-      {viewMode === 'table' ? (
+      {loading ? (
+        <Card loading className="!border-[#E2E8F0] !shadow-none" />
+      ) : viewMode === 'table' ? (
         <Card className="!border-[#E2E8F0] !shadow-none overflow-x-auto" styles={{ body: { padding: 0 } }}>
           <Table
             columns={columns}
