@@ -2,25 +2,59 @@ import { useEffect, useRef, useState } from 'react'
 import { Card, Steps, Button, Input, InputNumber, DatePicker, Form, Switch, Select, Table, Tag, Alert, Divider, Space, message, Modal } from 'antd'
 import { Megaphone, ClipboardList, Scale, Settings2, Rocket, Plus, Minus, Copy, CheckCircle2, Clock, FileText, Link2, ArrowLeft, ArrowRight, Save, Eye, Import, X } from 'lucide-react'
 import dayjs from 'dayjs'
-import { requiredMaterialTemplates, scoringCriteria, evalCategoryLabels } from '../../../mock/evaluationData'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useDemo } from '../../../context/DemoContext'
 import { copyText } from '../../../utils/demoActions'
 import { EVAL_TEST_IDS } from '../constants'
+import { DEFAULT_MATERIALS, DEFAULT_SCORING_ITEMS, EVAL_CATEGORY_LABELS } from '../createTemplates'
+import {
+  createEvaluationDraft,
+  createEvaluationFromBidTask,
+  fetchEvaluationDetail,
+  previewEvaluation,
+  publishEvaluation,
+  putEvaluationCriteria,
+  putEvaluationMaterials,
+  putEvaluationReviewers,
+  putEvaluationReviewSettings,
+  putEvaluationSuppliers,
+  readCurrentUserId,
+  updateEvaluationDraft,
+} from '../api'
+import type { EvaluationMaterialInput, EvaluationPreview, ScoringCriterionInput } from '../api'
 
 const { TextArea } = Input
 const { RangePicker } = DatePicker
 const DRAFT_KEY = 'bid-platform-evaluation-draft-v2'
+const MATERIAL_CATEGORY_TO_ENUM: Record<string, EvaluationMaterialInput['category']> = {
+  资质: 'qualification',
+  商务: 'commercial',
+  技术: 'technical',
+}
+const CATEGORY_TO_LABEL: Record<EvaluationMaterialInput['category'], string> = {
+  qualification: '资质',
+  commercial: '商务',
+  technical: '技术',
+}
+const METHOD_TO_ENUM: Record<string, ScoringCriterionInput['method']> = {
+  '最低价得分法': 'formula',
+  '专家打分': 'expert',
+  '客观项': 'objective',
+}
+const newIdempotencyKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
 export default function EvaluationCreate() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { addEvaluationTask, bidTasks, getTaskMaterials } = useDemo()
   const [current, setCurrent] = useState(0)
-  const [materials, setMaterials] = useState(requiredMaterialTemplates)
-  const [scoringItems, setScoringItems] = useState(() => scoringCriteria.map(item => item.id === 'SC01' ? { ...item, weight: 25, maxScore: 25, desc: item.desc.replace(/× 30/g, '× 25') } : item))
+  const [materials, setMaterials] = useState(DEFAULT_MATERIALS)
+  const [scoringItems, setScoringItems] = useState(() => DEFAULT_SCORING_ITEMS.map(item => item.id === 'SC01' ? { ...item, weight: 25, maxScore: 25, desc: item.desc.replace(/× 30/g, '× 25') } : item))
   const [published, setPublished] = useState(false)
   const [publishedTaskId, setPublishedTaskId] = useState('')
+  const [publishedInviteUrl, setPublishedInviteUrl] = useState('')
+  const [draftId, setDraftId] = useState<string>()
+  const [draftVersion, setDraftVersion] = useState<number>()
+  const [saving, setSaving] = useState(false)
+  const [serverPreview, setServerPreview] = useState<EvaluationPreview | null>(null)
   const [supplierEmails, setSupplierEmails] = useState<string[]>(['supplier-a@example.com', 'supplier-b@example.com'])
   const [reviewers, setReviewers] = useState<string[]>(['刘德海'])
   const [importProjectId, setImportProjectId] = useState<string>()
@@ -30,6 +64,7 @@ export default function EvaluationCreate() {
   const [dirty, setDirty] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const initialSourceLoaded = useRef(false)
+  const saveInFlight = useRef(false)
   const [form] = Form.useForm()
   const [reviewConfig, setReviewConfig] = useState({
     multiRoundPricing: true,
@@ -42,49 +77,166 @@ export default function EvaluationCreate() {
 
   const markDirty = () => setDirty(true)
 
-  const importProject = (taskId: string, notify = true) => {
-    const task = bidTasks.find(item => item.id === taskId)
-    if (!task) {
-      message.warning('未找到可导入的投标项目')
-      return
+  const buildBaseDraftPayload = () => {
+    const values = form.getFieldsValue(true)
+    const submitDeadline = values.submitDeadline ? dayjs(values.submitDeadline) : null
+    const evalStart = values.evalRange?.[0] ? dayjs(values.evalRange[0]) : null
+    const evalEnd = values.evalRange?.[1] ? dayjs(values.evalRange[1]) : null
+    if (!values.projectName || !values.tenderNo || !values.tenderEntity || !submitDeadline || !evalStart || !evalEnd) {
+      throw new Error('项目信息不完整')
     }
-    const categoryMap: Record<string, string> = { qualification: '资质', commercial: '商务', technical: '技术' }
-    const importedMaterials = getTaskMaterials(taskId).map((item, index) => ({
-      id: `RM${String(index + 1).padStart(2, '0')}`,
+    return {
+      projectName: String(values.projectName),
+      tenderNo: String(values.tenderNo),
+      tenderEntity: String(values.tenderEntity),
+      budgetAmount: String(values.budget ?? '0.00'),
+      currency: 'CNY' as const,
+      supplierDeadline: submitDeadline.toISOString(),
+      evaluationStartAt: evalStart.toISOString(),
+      evaluationEndAt: evalEnd.toISOString(),
+      description: values.description ? String(values.description) : undefined,
+      sourceBidTaskId: importedFrom || undefined,
+    }
+  }
+
+  const buildCreateDraftPayload = () => {
+    const userId = readCurrentUserId()
+    if (!userId) throw new Error('未找到当前登录用户，无法创建服务端草稿')
+    return { ...buildBaseDraftPayload(), assigneeId: userId }
+  }
+
+  const buildUpdateDraftPayload = () => {
+    const payload = buildBaseDraftPayload()
+    return {
+      projectName: payload.projectName,
+      tenderNo: payload.tenderNo,
+      tenderEntity: payload.tenderEntity,
+      budgetAmount: payload.budgetAmount,
+      currency: payload.currency,
+      supplierDeadline: payload.supplierDeadline,
+      evaluationStartAt: payload.evaluationStartAt,
+      evaluationEndAt: payload.evaluationEndAt,
+      description: payload.description,
+    }
+  }
+
+  const materialsToApi = (items: typeof materials): EvaluationMaterialInput[] =>
+    items.map((item, index) => ({
+      id: item.id,
       name: item.name,
-      category: categoryMap[item.part] || '技术',
-      required: item.status !== 'optional',
-      isDefault: false,
+      category: MATERIAL_CATEGORY_TO_ENUM[item.category] || 'technical',
+      required: item.required,
+      allowedMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      maxSizeBytes: 20_000_000,
+      sortOrder: index,
     }))
-    const submitDeadline = dayjs(task.deadline).hour(17).minute(0)
-    form.setFieldsValue({
-      projectName: task.projectName,
-      tenderNo: task.tenderNo,
-      tenderEntity: task.tenderEntity,
-      submitDeadline,
-      evalRange: [submitDeadline.add(1, 'day'), submitDeadline.add(3, 'day')],
-      description: `由投标项目 ${task.id} 导入，沿用项目基础信息与材料清单。`,
-    })
-    setMaterials(importedMaterials)
-    setImportProjectId(taskId)
-    setImportedFrom(taskId)
-    markDirty()
-    if (notify) message.success(`已导入“${task.projectName}”及 ${importedMaterials.length} 项材料`)
+
+  const criteriaToApi = (items: typeof scoringItems): ScoringCriterionInput[] =>
+    items.map((item, index) => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      maxScore: String(item.maxScore ?? item.weight ?? 0),
+      weightPercent: String(item.weight ?? 0),
+      method: METHOD_TO_ENUM[item.method] || 'expert',
+      description: item.desc || '',
+      sortOrder: index,
+    }))
+
+  const reviewSettingsToApi = () => ({
+    multiRoundPricing: reviewConfig.multiRoundPricing,
+    maxRounds: reviewConfig.maxRounds,
+    supplementDeadlineMinutes: reviewConfig.supplementDeadline,
+    allowModifyBeforeDeadline: reviewConfig.allowModify,
+    notifyOnMissing: reviewConfig.notifyOnMissing,
+    closeSubmissionAtDeadline: reviewConfig.closeAfterDeadline,
+  })
+
+  const suppliersToApi = (emails: string[]) => emails.map(email => {
+    const name = email.split('@')[0] || email
+    return { name, contactName: name, email, phone: undefined }
+  })
+
+  const createServerDraft = async () => {
+    if (draftId) return draftId
+    const created = await createEvaluationDraft(buildCreateDraftPayload())
+    setDraftId(created.id)
+    setDraftVersion(created.version)
+    return created.id
+  }
+
+  const saveServerDraft = async () => {
+    const targetId = await createServerDraft()
+    const updated = await updateEvaluationDraft(targetId, buildUpdateDraftPayload(), draftVersion)
+    setDraftVersion(updated.version)
+    await putEvaluationMaterials(targetId, materialsToApi(materials))
+    await putEvaluationCriteria(targetId, criteriaToApi(scoringItems))
+    await putEvaluationReviewSettings(targetId, reviewSettingsToApi())
+    await putEvaluationReviewers(targetId, reviewers)
+    await putEvaluationSuppliers(targetId, suppliersToApi(supplierEmails))
+    const detail = await fetchEvaluationDetail(targetId)
+    setDraftVersion(detail.version)
+    return targetId
+  }
+
+  const importProject = async (taskId: string, notify = true) => {
+    if (!taskId) return
+    try {
+      const detail = await createEvaluationFromBidTask(taskId)
+      setDraftId(detail.id)
+      setDraftVersion(detail.version)
+      const importedMaterials = detail.materials.map((item, index) => ({
+        id: item.id,
+        name: item.name,
+        category: (CATEGORY_TO_LABEL[item.category] || '技术') as '资质' | '商务' | '技术',
+        required: item.required,
+        isDefault: false,
+      }))
+      const importedCriteria = detail.scoringCriteria.map(item => ({
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        maxScore: Number(item.maxScore),
+        weight: Number(item.weightPercent),
+        method: item.method === 'formula' ? '最低价得分法' : item.method === 'objective' ? '客观项' : '专家打分',
+        desc: item.description,
+      }))
+      form.setFieldsValue({
+        projectName: detail.projectName,
+        tenderNo: detail.tenderNo,
+        tenderEntity: detail.tenderEntity,
+        budget: Number(detail.budgetAmount),
+        submitDeadline: dayjs(detail.supplierDeadline),
+        evalRange: [dayjs(detail.evaluationStartAt), dayjs(detail.evaluationEndAt)],
+        description: detail.description || `由投标项目 ${taskId} 导入，沿用项目基础信息与材料清单。`,
+      })
+      setMaterials(importedMaterials)
+      setScoringItems(importedCriteria)
+      setImportProjectId(taskId)
+      setImportedFrom(taskId)
+      markDirty()
+      if (notify) message.success(`已导入“${detail.projectName}”及 ${importedMaterials.length} 项材料`)
+    } catch (err) {
+      message.error(`导入投标项目失败：${err instanceof Error ? err.message : '未知错误'}`)
+    }
   }
 
   useEffect(() => {
     const sourceTaskId = searchParams.get('sourceTask')
     if (sourceTaskId && !initialSourceLoaded.current) {
       initialSourceLoaded.current = true
-      importProject(sourceTaskId, false)
-      message.success('已从投标项目带入基础信息和材料清单')
+      void importProject(sourceTaskId, false)
+      message.success('已从投标项目导入基础信息和材料清单')
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const serializeDraft = () => {
     const values = form.getFieldsValue(true)
     return {
       current,
+      draftId,
+      draftVersion,
       values: {
         ...values,
         submitDeadline: values.submitDeadline ? dayjs(values.submitDeadline).toISOString() : null,
@@ -100,13 +252,28 @@ export default function EvaluationCreate() {
     }
   }
 
-  const saveDraft = (notify = true) => {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(serializeDraft()))
-    const time = dayjs().format('HH:mm:ss')
-    setLastSaved(time)
-    setHasDraft(true)
-    setDirty(false)
-    if (notify) message.success('评标任务草稿已保存')
+  const saveDraft = async (notify = true) => {
+    if (saveInFlight.current) return
+    saveInFlight.current = true
+    try {
+      setSaving(true)
+      await saveServerDraft()
+      const time = dayjs().format('HH:mm:ss')
+      setLastSaved(time)
+      setHasDraft(true)
+      setDirty(false)
+      if (notify) message.success('评标任务草稿已保存')
+    } catch (err) {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...serializeDraft(), draftId, draftVersion }))
+      const time = dayjs().format('HH:mm:ss')
+      setLastSaved(time)
+      setHasDraft(true)
+      setDirty(false)
+      if (notify) message.warning(`服务端草稿保存失败，已保留本地草稿：${err instanceof Error ? err.message : '未知错误'}`)
+    } finally {
+      saveInFlight.current = false
+      setSaving(false)
+    }
   }
 
   const restoreDraft = () => {
@@ -122,6 +289,8 @@ export default function EvaluationCreate() {
       if (draft.reviewConfig) setReviewConfig(draft.reviewConfig)
       if (draft.supplierEmails) setSupplierEmails(draft.supplierEmails)
       if (draft.reviewers) setReviewers(draft.reviewers)
+      if (draft.draftId) setDraftId(draft.draftId)
+      if (draft.draftVersion) setDraftVersion(draft.draftVersion)
       if (draft.importedFrom) {
         setImportedFrom(draft.importedFrom)
         setImportProjectId(draft.importedFrom)
@@ -139,9 +308,21 @@ export default function EvaluationCreate() {
 
   useEffect(() => {
     if (!dirty || published) return
-    const timer = window.setTimeout(() => saveDraft(false), 900)
+    const timer = window.setTimeout(() => void saveDraft(false), 900)
     return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty, published, current, materials, scoringItems, reviewConfig, supplierEmails, reviewers])
+
+  const openPreview = async () => {
+    setPreviewOpen(true)
+    if (!draftId) return
+    try {
+      const data = await previewEvaluation(draftId)
+      setServerPreview(data)
+    } catch {
+      setServerPreview(null)
+    }
+  }
 
   const steps = [
     { title: '项目信息', icon: Megaphone },
@@ -185,7 +366,7 @@ export default function EvaluationCreate() {
   const totalWeight = scoringItems.reduce((sum, s) => sum + s.weight, 0)
   const requiredCount = materials.filter(m => m.required).length
 
-  const portalLink = `${window.location.origin}/evaluation/portal/${publishedTaskId || 'EVAL-DEMO'}`
+  const portalLink = publishedInviteUrl || `${window.location.origin}/evaluation/portal/${publishedTaskId || 'EVAL-DEMO'}`
 
   const validateCurrentStep = async () => {
     if (current === 0) {
@@ -228,34 +409,20 @@ export default function EvaluationCreate() {
       message.warning('请检查评分权重、供应商与评审人配置')
       return
     }
-    const values = form.getFieldsValue(true)
-    if (!values.projectName || !values.tenderNo || !values.tenderEntity || !values.submitDeadline) {
-      setCurrent(0)
-      message.warning('项目信息不完整，请补充后发布')
-      return
+    try {
+      await form.validateFields()
+      const targetId = await saveServerDraft()
+      const result = await publishEvaluation(targetId, newIdempotencyKey())
+      setPublishedTaskId(result.evaluation.id)
+      setPublishedInviteUrl(result.invites[0]?.inviteUrl || '')
+      setPublished(true)
+      localStorage.removeItem(DRAFT_KEY)
+      setHasDraft(false)
+      setDirty(false)
+      message.success('评标任务已发布，供应商入口链接已生成')
+    } catch (err) {
+      message.error(`发布失败：${err instanceof Error ? err.message : '未知错误'}`)
     }
-    const taskId = `EVAL-${dayjs().format('YYYYMMDD-HHmmss')}`
-    addEvaluationTask({
-      id: taskId,
-      projectName: values.projectName,
-      tenderNo: values.tenderNo,
-      tenderEntity: values.tenderEntity,
-      budget: Number(values.budget || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
-      deadline: dayjs(values.submitDeadline).format('YYYY-MM-DD'),
-      status: 'collecting',
-      currentStep: 2,
-      progress: 15,
-      assignee: reviewers[0],
-      bidderCount: supplierEmails.length,
-      createdAt: dayjs().format('YYYY-MM-DD'),
-      tags: ['新发布', '材料收集中'],
-    })
-    setPublishedTaskId(taskId)
-    setPublished(true)
-    localStorage.removeItem(DRAFT_KEY)
-    setHasDraft(false)
-    setDirty(false)
-    message.success('评标任务已发布，供应商入口链接已生成')
   }
 
   const confirmPublish = async () => {
@@ -305,8 +472,8 @@ export default function EvaluationCreate() {
         </div>
         <Space wrap>
           {hasDraft && <Button icon={<Clock size={14} />} onClick={restoreDraft}>恢复草稿</Button>}
-          <Button icon={<Save size={14} />} onClick={() => saveDraft()} data-testid={EVAL_TEST_IDS.createSaveDraft}>保存草稿</Button>
-          <Button icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)} data-testid={EVAL_TEST_IDS.createPreview}>预览</Button>
+          <Button icon={<Save size={14} />} loading={saving} onClick={() => void saveDraft()} data-testid={EVAL_TEST_IDS.createSaveDraft}>保存草稿</Button>
+          <Button icon={<Eye size={14} />} onClick={() => void openPreview()} data-testid={EVAL_TEST_IDS.createPreview}>预览</Button>
           <Button icon={<X size={14} />} onClick={cancelCreate} data-testid={EVAL_TEST_IDS.createCancel}>取消</Button>
         </Space>
       </div>
@@ -341,15 +508,13 @@ export default function EvaluationCreate() {
                   <div className="text-sm font-medium text-[#1E293B] mb-1">从已有投标项目导入</div>
                   <div className="text-xs text-[#64748B] mb-3">自动带入项目编号、采购单位、截止时间及材料清单，减少重复配置。</div>
                   <div className="flex gap-2">
-                    <Select
+                    <Input
                       value={importProjectId}
-                      onChange={value => importProject(value)}
-                      placeholder="选择投标项目"
+                      onChange={event => setImportProjectId(event.target.value)}
+                      placeholder="输入投标项目 ID，或从投标详情页发起评标"
                       className="flex-1"
-                      showSearch
-                      optionFilterProp="label"
-                      options={bidTasks.map(task => ({ value: task.id, label: `${task.projectName}（${task.tenderNo}）` }))}
                     />
+                    <Button onClick={() => void importProject(importProjectId || '')}>导入</Button>
                     {importedFrom && <Button onClick={() => { setImportProjectId(undefined); setImportedFrom(undefined); markDirty() }}>解除关联</Button>}
                   </div>
                 </div>
@@ -526,7 +691,7 @@ export default function EvaluationCreate() {
                   title: '类别',
                   dataIndex: 'category',
                   width: 100,
-                  render: (cat: string) => <Tag>{evalCategoryLabels[cat] || cat}</Tag>,
+                  render: (cat: string) => <Tag>{EVAL_CATEGORY_LABELS[cat] || cat}</Tag>,
                 },
                 {
                   title: '评分方式',
@@ -746,7 +911,7 @@ export default function EvaluationCreate() {
                   <Button
                     size="large"
                     icon={<Eye size={16} />}
-                    onClick={() => setPreviewOpen(true)}
+                    onClick={() => void openPreview()}
                     className="!rounded-lg !h-11 !px-6"
                   >
                     发布预览
@@ -834,9 +999,9 @@ export default function EvaluationCreate() {
       >
         <div className="space-y-4 pt-2">
           <Alert
-            type={form.getFieldValue('projectName') && totalWeight === 100 ? 'success' : 'warning'}
+            type={serverPreview ? (serverPreview.validation.valid ? 'success' : 'warning') : (form.getFieldValue('projectName') && totalWeight === 100 ? 'success' : 'warning')}
             showIcon
-            message={form.getFieldValue('projectName') && totalWeight === 100 ? '核心配置检查通过' : '仍有未完成配置，请返回对应步骤补充'}
+            message={serverPreview ? (serverPreview.validation.valid ? '服务端校验通过' : '服务端校验未通过') : (form.getFieldValue('projectName') && totalWeight === 100 ? '核心配置检查通过' : '仍有未完成配置，请返回对应步骤补充')}
           />
           <div className="rounded-lg bg-[#F8FAFC] p-4 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
             <div><span className="text-[#64748B]">项目名称：</span><span className="text-[#1E293B] font-medium">{form.getFieldValue('projectName') || '未填写'}</span></div>
