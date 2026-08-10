@@ -42,6 +42,10 @@ class EvaluationStore:
         self.token_hash_index: dict[str, str] = {}  # access token_hash -> session_id
         self.refresh_hash_index: dict[str, str] = {}  # refresh token_hash -> session_id
 
+        from app.domains.evaluations.demo_seed import seed_demo_evaluation_store
+
+        seed_demo_evaluation_store(self)
+
     def save_evaluation(self, entity: EvaluationEntity) -> EvaluationEntity:
         self.evaluations[entity.id] = copy.deepcopy(entity)
         return copy.deepcopy(entity)
