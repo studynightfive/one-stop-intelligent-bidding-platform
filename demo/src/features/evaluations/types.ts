@@ -1,9 +1,12 @@
 export type EvaluationTaskStatus =
+  | 'draft'
   | 'collecting'
+  | 'pending'
   | 'ai_review'
   | 'human_review'
   | 'completed'
   | 'closed'
+  | 'cancelled'
 
 export type EvaluationFilterTab = EvaluationTaskStatus | 'all' | 'risk'
 
@@ -18,6 +21,7 @@ export type EvaluationTaskSummary = {
   bidderCount: number
   progress: number
   budget: string
+  riskCount: number
 }
 
 export type PortalMode = 'active' | 'closed'
