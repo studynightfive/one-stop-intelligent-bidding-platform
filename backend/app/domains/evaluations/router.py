@@ -638,6 +638,13 @@ async def download_report(
         if report.evaluation_id != evaluationId:
             raise DomainError(code="NOT_FOUND", message="报告不存在")
         _ = container.store.get_evaluation(evaluationId, tenant_id=actor.tenant_id)
+        if report.content is not None:
+            return binary_file_response(
+                content=report.content,
+                file_name=report.file_name or f"evaluation-report-{report.id[:8]}.{report.format}",
+                content_type=report.mime_type or "application/octet-stream",
+                sha256=report.sha256,
+            )
         file_obj = await container.scoring.files.get_file(tenant_id=actor.tenant_id, file_id=report.file_id)
         if file_obj.download_url:
             return binary_redirect(file_obj.download_url, sha256=file_obj.sha256)

@@ -172,6 +172,11 @@ class EvaluationReportEntity:
     created_by_id: str
     created_by_name: str
     created_at: datetime
+    file_name: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    sha256: str | None = None
+    content: bytes | None = field(default=None, repr=False)
 
 
 @dataclass
