@@ -3229,7 +3229,7 @@ paths:
       tags:
       - 投标任务
       summary: POST /bid-tasks/{taskId}/documents
-      description: 请求：GenerateBidDocumentRequest；响应 data：JobRef；权限：owner。
+      description: 请求：GenerateBidDocumentRequest；响应 data：JobRef；权限：owner。技术标必须按 technicalDocument 中锁定的格式逐段生成，图片按 sectionKey 与段落锚点插入。
       operationId: post_bid_tasks_taskId_documents
       x-backend-owner: M5
       x-frontend-owner: M1
@@ -12481,11 +12481,126 @@ components:
           $ref: '#/components/schemas/Id'
         includeWatermark:
           type: boolean
+        technicalDocument:
+          $ref: '#/components/schemas/TechnicalDocumentGenerationOptions'
       required:
       - mode
       - sections
       - templateMode
       - includeWatermark
+    TechnicalDocumentSectionTemplate:
+      type: object
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          pattern: ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$
+        heading:
+          type: string
+          minLength: 1
+          maxLength: 200
+        headingLevel:
+          type: integer
+          minimum: 1
+          maximum: 3
+        instructions:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        targetParagraphs:
+          type: integer
+          minimum: 1
+          maximum: 30
+        targetWordsPerParagraph:
+          type: integer
+          minimum: 80
+          maximum: 1500
+        required:
+          type: boolean
+      required:
+      - key
+      - heading
+      - headingLevel
+      - instructions
+      - targetParagraphs
+      - targetWordsPerParagraph
+      - required
+    TechnicalDocumentImage:
+      type: object
+      additionalProperties: false
+      properties:
+        fileId:
+          $ref: '#/components/schemas/Id'
+        sectionKey:
+          type: string
+          pattern: ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$
+        caption:
+          type: string
+          minLength: 1
+          maxLength: 300
+        altText:
+          type: string
+          maxLength: 500
+        placement:
+          type: string
+          enum:
+          - before_section
+          - after_paragraph
+          - after_section
+        afterParagraphIndex:
+          type: integer
+          minimum: 1
+          maximum: 30
+      required:
+      - fileId
+      - sectionKey
+      - caption
+      - placement
+    TechnicalDocumentGenerationOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        strategy:
+          type: string
+          enum:
+          - paragraph_by_paragraph
+        templateName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        sections:
+          type: array
+          minItems: 1
+          maxItems: 60
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/TechnicalDocumentSectionTemplate'
+        referenceImages:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/TechnicalDocumentImage'
+        contextWindowCharacters:
+          type: integer
+          minimum: 2000
+          maximum: 200000
+        carryForwardParagraphs:
+          type: integer
+          minimum: 0
+          maximum: 10
+        preserveHeadingNumbering:
+          type: boolean
+        requireEvidence:
+          type: boolean
+      required:
+      - strategy
+      - templateName
+      - sections
+      - referenceImages
+      - contextWindowCharacters
+      - carryForwardParagraphs
+      - preserveHeadingNumbering
+      - requireEvidence
     CreateQualificationRequest:
       type: object
       additionalProperties: false
@@ -12769,6 +12884,7 @@ components:
           enum:
           - tender
           - bidMaterial
+          - bidIllustration
           - qualification
           - fragment
           - supplierMaterial
