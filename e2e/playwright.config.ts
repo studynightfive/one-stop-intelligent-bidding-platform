@@ -1,9 +1,9 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test'
 
-const apiPort = Number(process.env.API_PORT ?? 8210);
-const webPort = Number(process.env.WEB_PORT ?? 3210);
-const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${webPort}`;
-const apiURL = process.env.E2E_API_URL ?? `http://127.0.0.1:${apiPort}`;
+const apiPort = Number(process.env.API_PORT ?? 8210)
+const webPort = Number(process.env.WEB_PORT ?? 3210)
+const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${webPort}`
+const apiURL = process.env.E2E_API_URL ?? `http://127.0.0.1:${apiPort}`
 
 export default defineConfig({
   testDir: './specs',
@@ -37,4 +37,4 @@ export default defineConfig({
     },
   ],
   metadata: { apiURL },
-});
+})

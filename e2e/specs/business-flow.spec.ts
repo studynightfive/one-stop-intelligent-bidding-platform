@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
-import type { APIRequestContext } from '@playwright/test';
-import { expect, test } from '@playwright/test';
-import { ApiClient } from '../helpers/api-client';
+import { createHash, randomUUID } from 'node:crypto'
+import type { APIRequestContext } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { ApiClient } from '../helpers/api-client'
 
 interface AuthSession {
   accessToken: string;
@@ -92,16 +92,16 @@ interface EvaluationReport {
 const onePixelPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII=',
   'base64',
-);
+)
 
 const minimalPdf = Buffer.from(
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
   + '2 0 obj<</Type/Pages/Count 0/Kids[]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n',
   'utf8',
-);
+)
 
 async function authenticatedClient(request: APIRequestContext): Promise<{ client: ApiClient; session: AuthSession }> {
-  const client = new ApiClient(request);
+  const client = new ApiClient(request)
   const session = await client.data<AuthSession>({
     method: 'POST',
     path: '/api/v1/auth/login',
@@ -110,9 +110,9 @@ async function authenticatedClient(request: APIRequestContext): Promise<{ client
       password: process.env.E2E_ADMIN_PASSWORD ?? 'DemoAdmin123!',
       remember: false,
     },
-  });
-  client.setAccessToken(session.accessToken);
-  return { client, session };
+  })
+  client.setAccessToken(session.accessToken)
+  return { client, session }
 }
 
 async function uploadFile(
@@ -130,21 +130,21 @@ async function uploadFile(
       purpose: file.purpose,
       resourceId: file.resourceId,
     },
-  });
-  expect(upload.totalParts).toBe(1);
+  })
+  expect(upload.totalParts).toBe(1)
   const part = await client.data<UploadPart>({
     method: 'PUT',
     path: `/api/v1/files/upload-sessions/${upload.id}/parts/1`,
     body: file.content,
-  });
+  })
   const completed = await client.data<FileRef>({
     method: 'POST',
     path: `/api/v1/files/upload-sessions/${upload.id}/complete`,
     headers: { 'Idempotency-Key': `e2e-upload-${randomUUID()}` },
     data: { parts: [part] },
-  });
-  expect(completed.scanStatus).toBe('clean');
-  return completed;
+  })
+  expect(completed.scanStatus).toBe('clean')
+  return completed
 }
 
 async function createPublishedEvaluation(
@@ -152,8 +152,8 @@ async function createPublishedEvaluation(
   userId: string,
   supplierCount = 2,
 ): Promise<{ evaluation: Evaluation; suppliers: Supplier[]; published: PublishResult }> {
-  const suffix = randomUUID().slice(0, 8);
-  const now = Date.now();
+  const suffix = randomUUID().slice(0, 8)
+  const now = Date.now()
   const evaluation = await client.data<Evaluation>({
     method: 'POST',
     path: '/api/v1/evaluations',
@@ -169,7 +169,7 @@ async function createPublishedEvaluation(
       evaluationEndAt: new Date(now + 10 * 86_400_000).toISOString(),
       description: 'Playwright 真实接口评标闭环',
     },
-  });
+  })
   await client.data({
     method: 'PUT',
     path: `/api/v1/evaluations/${evaluation.id}/materials`,
@@ -183,7 +183,7 @@ async function createPublishedEvaluation(
         sortOrder: 0,
       }],
     },
-  });
+  })
   await client.data({
     method: 'PUT',
     path: `/api/v1/evaluations/${evaluation.id}/criteria`,
@@ -198,7 +198,7 @@ async function createPublishedEvaluation(
         sortOrder: 0,
       }],
     },
-  });
+  })
   await client.data({
     method: 'PUT',
     path: `/api/v1/evaluations/${evaluation.id}/review-settings`,
@@ -210,12 +210,12 @@ async function createPublishedEvaluation(
       notifyOnMissing: true,
       closeSubmissionAtDeadline: true,
     },
-  });
+  })
   await client.data({
     method: 'PUT',
     path: `/api/v1/evaluations/${evaluation.id}/reviewers`,
     data: { reviewerIds: [userId] },
-  });
+  })
   const suppliers = await client.data<Supplier[]>({
     method: 'PUT',
     path: `/api/v1/evaluations/${evaluation.id}/suppliers`,
@@ -226,47 +226,47 @@ async function createPublishedEvaluation(
         email: `e2e-${suffix}-${index + 1}@example.test`,
       })),
     },
-  });
+  })
   const validation = await client.data<{ valid: boolean }>({
     method: 'POST',
     path: `/api/v1/evaluations/${evaluation.id}/validate`,
-  });
-  expect(validation.valid).toBe(true);
+  })
+  expect(validation.valid).toBe(true)
   const published = await client.data<PublishResult>({
     method: 'POST',
     path: `/api/v1/evaluations/${evaluation.id}/publish`,
     headers: { 'Idempotency-Key': `e2e-publish-${suffix}` },
-  });
-  return { evaluation, suppliers, published };
+  })
+  return { evaluation, suppliers, published }
 }
 
 async function exchangeInvite(request: APIRequestContext, invite: Invite): Promise<ApiClient> {
-  const client = new ApiClient(request);
+  const client = new ApiClient(request)
   const session = await client.data<PortalSession>({
     method: 'POST',
     path: '/api/v1/portal/session/exchange',
     data: { inviteCode: invite.inviteUrl.split('/').at(-1) },
-  });
-  expect(session.supplier.id).toBe(invite.supplierId);
-  return client.setAccessToken(session.portalAccessToken);
+  })
+  expect(session.supplier.id).toBe(invite.supplierId)
+  return client.setAccessToken(session.portalAccessToken)
 }
 
 test.describe('real business flows @contract', () => {
-  test.describe.configure({ mode: 'serial' });
+  test.describe.configure({ mode: 'serial' })
 
   test.beforeEach(({}, testInfo) => {
-    test.skip(testInfo.project.name !== 'desktop', 'state-changing contract flows run once on desktop');
-  });
+    test.skip(testInfo.project.name !== 'desktop', 'state-changing contract flows run once on desktop')
+  })
 
   test('create → parse → review → paragraph AI technical document with image', async ({ request }) => {
-    const { client, session } = await authenticatedClient(request);
+    const { client, session } = await authenticatedClient(request)
     const tender = await uploadFile(client, {
       name: `e2e-tender-${randomUUID()}.pdf`,
       mimeType: 'application/pdf',
       content: minimalPdf,
       purpose: 'tender',
-    });
-    const suffix = randomUUID().slice(0, 8);
+    })
+    const suffix = randomUUID().slice(0, 8)
     const task = await client.data<BidTask>({
       method: 'POST',
       path: '/api/v1/bid-tasks',
@@ -279,20 +279,20 @@ test.describe('real business flows @contract', () => {
         tenderFileId: tender.id,
         tags: ['e2e', 'paragraph-ai'],
       },
-    });
+    })
     const parsed = await client.data<JobRef>({
       method: 'POST',
       path: `/api/v1/bid-tasks/${task.id}/parse`,
       headers: { 'Idempotency-Key': `e2e-parse-${suffix}` },
-    });
-    expect(parsed.status).toBe('succeeded');
+    })
+    expect(parsed.status).toBe('succeeded')
     const reviewed = await client.data<JobRef>({
       method: 'POST',
       path: `/api/v1/bid-tasks/${task.id}/reviews`,
       headers: { 'Idempotency-Key': `e2e-review-${suffix}` },
       data: { types: ['signature', 'price', 'content', 'consistency'] },
-    });
-    expect(reviewed.status).toBe('succeeded');
+    })
+    expect(reviewed.status).toBe('succeeded')
 
     const illustration = await uploadFile(client, {
       name: `e2e-architecture-${suffix}.png`,
@@ -300,7 +300,7 @@ test.describe('real business flows @contract', () => {
       content: onePixelPng,
       purpose: 'bidIllustration',
       resourceId: task.id,
-    });
+    })
     const generated = await client.data<JobRef>({
       method: 'POST',
       path: `/api/v1/bid-tasks/${task.id}/documents`,
@@ -336,102 +336,102 @@ test.describe('real business flows @contract', () => {
           requireEvidence: true,
         },
       },
-    });
-    expect(generated.status).toBe('succeeded');
+    })
+    expect(generated.status).toBe('succeeded')
 
     const documents = await client.data<BidDocument[]>({
       path: `/api/v1/bid-tasks/${task.id}/documents`,
-    });
-    const technical = documents.find((item) => item.type === 'technical');
-    if (!technical) throw new Error('technical document was not persisted');
-    expect(technical.latestFile.mimeType).toContain('wordprocessingml.document');
+    })
+    const technical = documents.find((item) => item.type === 'technical')
+    if (!technical) throw new Error('technical document was not persisted')
+    expect(technical.latestFile.mimeType).toContain('wordprocessingml.document')
     const download = await client.raw({
       path: `/api/v1/bid-tasks/${task.id}/documents/${technical.id}/download`,
-    });
-    const docx = await download.body();
-    expect(docx.subarray(0, 2).toString()).toBe('PK');
-    expect(docx.includes(Buffer.from('word/media/'))).toBe(true);
-  });
+    })
+    const docx = await download.body()
+    expect(docx.subarray(0, 2).toString()).toBe('PK')
+    expect(docx.includes(Buffer.from('word/media/'))).toBe(true)
+  })
 
   test('invite → submit → AI score → report → close', async ({ request }) => {
-    const { client, session } = await authenticatedClient(request);
-    const { evaluation, published } = await createPublishedEvaluation(client, session.user.id, 2);
+    const { client, session } = await authenticatedClient(request)
+    const { evaluation, published } = await createPublishedEvaluation(client, session.user.id, 2)
     for (const invite of published.invites) {
-      const portal = await exchangeInvite(request, invite);
+      const portal = await exchangeInvite(request, invite)
       const receipt = await portal.data<{ supplierId: string; submittedMaterialCount: number }>({
         method: 'POST',
         path: '/api/v1/portal/submit',
         headers: { 'Idempotency-Key': `e2e-submit-${invite.supplierId}` },
         data: { confirmed: true },
-      });
-      expect(receipt.supplierId).toBe(invite.supplierId);
-      expect(receipt.submittedMaterialCount).toBe(0);
+      })
+      expect(receipt.supplierId).toBe(invite.supplierId)
+      expect(receipt.submittedMaterialCount).toBe(0)
     }
 
     for (const path of ['material-checks', 'risk-checks', 'ai-scoring']) {
       const job = await client.data<JobRef>({
         method: 'POST',
         path: `/api/v1/evaluations/${evaluation.id}/${path}`,
-      });
-      expect(job.status).toBe('succeeded');
+      })
+      expect(job.status).toBe('succeeded')
     }
     const scores = await client.data<ScoreItem[]>({
       path: `/api/v1/evaluations/${evaluation.id}/scores`,
-    });
-    expect(scores.length).toBeGreaterThanOrEqual(2);
-    const first = scores[0];
+    })
+    expect(scores.length).toBeGreaterThanOrEqual(2)
+    const first = scores[0]
     await client.data<ScoreItem>({
       method: 'PATCH',
       path: `/api/v1/evaluations/${evaluation.id}/scores/${first.supplierId}/${first.criterionId}`,
       headers: { 'If-Match': String(first.version) },
       data: { humanScore: '88.00', adjustmentReason: 'E2E 人工复核通过' },
-    });
+    })
     await client.data<{ confirmed: boolean }>({
       method: 'POST',
       path: `/api/v1/evaluations/${evaluation.id}/scores/confirm`,
       data: { comment: 'E2E 评分确认' },
-    });
+    })
     const reportJob = await client.data<JobRef>({
       method: 'POST',
       path: `/api/v1/evaluations/${evaluation.id}/reports`,
       data: { formats: ['docx', 'pdf'] },
-    });
-    expect(reportJob.status).toBe('succeeded');
+    })
+    expect(reportJob.status).toBe('succeeded')
     const reports = await client.data<EvaluationReport[]>({
       path: `/api/v1/evaluations/${evaluation.id}/reports`,
-    });
-    expect(new Set(reports.map((item) => item.format))).toEqual(new Set(['docx', 'pdf']));
+    })
+    expect(new Set(reports.map((item) => item.format))).toEqual(new Set(['docx', 'pdf']))
     for (const report of reports) {
       const response = await client.raw({
         path: `/api/v1/evaluations/${evaluation.id}/reports/${report.id}/download`,
-      });
-      const body = await response.body();
-      expect(body.length).toBeGreaterThan(100);
+      })
+      const body = await response.body()
+      expect(body.length).toBeGreaterThan(100)
       expect(report.format === 'pdf' ? body.subarray(0, 4).toString() : body.subarray(0, 2).toString())
-        .toBe(report.format === 'pdf' ? '%PDF' : 'PK');
+        .toBe(report.format === 'pdf' ? '%PDF' : 'PK')
     }
     const closed = await client.data<Evaluation>({
       method: 'POST',
       path: `/api/v1/evaluations/${evaluation.id}/close`,
       headers: { 'Idempotency-Key': `e2e-close-${evaluation.id}` },
       data: { resultSummary: 'E2E 评标流程完成' },
-    });
-    expect(closed.status).toBe('closed');
-  });
+    })
+    expect(closed.status).toBe('closed')
+  })
 
   test('portal tokens expose only their own supplier', async ({ request }) => {
-    const { client, session } = await authenticatedClient(request);
-    const { suppliers, published } = await createPublishedEvaluation(client, session.user.id, 2);
-    const firstPortal = await exchangeInvite(request, published.invites[0]);
-    const secondPortal = await exchangeInvite(request, published.invites[1]);
-    const first = await firstPortal.data<PortalContext>({ path: '/api/v1/portal/me' });
-    const second = await secondPortal.data<PortalContext>({ path: '/api/v1/portal/me' });
+    const { client, session } = await authenticatedClient(request)
+    const { suppliers, published } = await createPublishedEvaluation(client, session.user.id, 2)
+    const firstPortal = await exchangeInvite(request, published.invites[0])
+    const secondPortal = await exchangeInvite(request, published.invites[1])
+    const first = await firstPortal.data<PortalContext>({ path: '/api/v1/portal/me' })
+    const second = await secondPortal.data<PortalContext>({ path: '/api/v1/portal/me' })
 
-    expect(first.supplier.id).toBe(suppliers[0].id);
-    expect(second.supplier.id).toBe(suppliers[1].id);
-    expect(JSON.stringify(first)).not.toContain(suppliers[1].email);
-    expect(JSON.stringify(second)).not.toContain(suppliers[0].email);
-    expect(first.allowedActions).toContain('submit');
-    expect(second.allowedActions).toContain('submit');
-  });
-});
+    expect(first.supplier.id).toBe(suppliers[0].id)
+    expect(second.supplier.id).toBe(suppliers[1].id)
+    expect(JSON.stringify(first)).not.toContain(suppliers[1].email)
+    expect(JSON.stringify(second)).not.toContain(suppliers[0].email)
+    expect(first.allowedActions).toContain('submit')
+    expect(second.allowedActions).toContain('submit')
+  })
+})

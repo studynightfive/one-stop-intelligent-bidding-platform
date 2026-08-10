@@ -9,6 +9,7 @@ export const testIds = {
   bidCreateButton: 'bid-dashboard-create',
   bidCreate: 'bid-create',
   bidDetail: 'bid-task-detail',
+  bidTaskNotFound: 'bid-task-not-found',
   bidMaterialsTab: 'bid-task-materials',
   bidOutputTab: 'bid-task-output',
   bidOutputGenerate: 'bid-output-generate',
@@ -24,6 +25,6 @@ export const testIds = {
   portalClosed: 'eval-portal-closed',
 
   jobProgress: 'common-job-progress',
-} as const;
+} as const
 
-export type TestId = (typeof testIds)[keyof typeof testIds];
+export type TestId = (typeof testIds)[keyof typeof testIds]

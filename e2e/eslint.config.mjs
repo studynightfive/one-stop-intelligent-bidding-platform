@@ -1,5 +1,5 @@
-import typescriptParser from '@typescript-eslint/parser';
-import typescriptPlugin from '@typescript-eslint/eslint-plugin';
+import typescriptParser from '@typescript-eslint/parser'
+import typescriptPlugin from '@typescript-eslint/eslint-plugin'
 
 export default [
   {
@@ -16,6 +16,7 @@ export default [
       ...typescriptPlugin.configs.recommended.rules,
       '@typescript-eslint/consistent-type-imports': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
+      semi: ['error', 'never'],
     },
   },
-];
+]
