@@ -44,9 +44,35 @@ class _NotificationService:
 class _AuditService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.list_calls: list[dict[str, object]] = []
 
     async def log(self, **kwargs) -> None:
         self.calls.append(kwargs)
+
+    async def list_events(self, **kwargs):
+        self.list_calls.append(kwargs)
+        return (
+            [
+                SimpleNamespace(
+                    id=uuid4(),
+                    tenant_id=kwargs["tenant_id"],
+                    aggregate_type=kwargs["aggregate_type"],
+                    aggregate_id=kwargs["aggregate_id"],
+                    actor_type=SimpleNamespace(value="user"),
+                    actor_id=uuid4(),
+                    actor_name="负责人",
+                    action="evaluation.updated",
+                    summary="更新评标",
+                    target_type="supplier",
+                    target_id=uuid4(),
+                    changes={"items": [{"field": "status", "oldValue": "draft", "newValue": "collecting"}]},
+                    request_id="request-test",
+                    ip_address=None,
+                    created_at=datetime.now(UTC),
+                )
+            ],
+            1,
+        )
 
 
 class _FileService:
@@ -130,6 +156,17 @@ async def test_job_notification_and_audit_adapters() -> None:
     )
     assert audit_service.calls[0]["target_id"] == target_id
     assert audit_service.calls[0]["changes"]["targetType"] == "supplier"
+    events, total = await audit_adapter.list_events(
+        tenant_id=str(tenant_id),
+        aggregate_type="evaluation",
+        aggregate_id=str(aggregate_id),
+        actor="负责人",
+        resource="supplier",
+    )
+    assert total == 1
+    assert events[0].action == "evaluation.updated"
+    assert events[0].changes[0]["field"] == "status"
+    assert audit_service.list_calls[0]["target_type"] == "supplier"
 
 
 @pytest.mark.asyncio

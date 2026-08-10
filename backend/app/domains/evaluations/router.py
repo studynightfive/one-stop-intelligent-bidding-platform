@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Mapping
+from datetime import datetime
 from typing import Any, TypeVar, cast
 
-from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 
 from app.domains.evaluations.container import M6Container
 from app.domains.evaluations.errors import DomainError
@@ -133,6 +134,37 @@ async def get_evaluation(
 ) -> Response:
     data = await _run(request, container.evaluations.get_detail(actor, evaluationId))
     return success(data, request=request)
+
+
+@router.get("/evaluations/{evaluationId}/audit-events")
+async def list_evaluation_audit_events(
+    request: Request,
+    evaluationId: str,
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=20, ge=1, le=100),
+    actorFilter: str | None = Query(default=None, alias="actor"),
+    action: str | None = None,
+    resource: str | None = None,
+    dateFrom: datetime | None = None,
+    dateTo: datetime | None = None,
+    container: M6Container = Depends(get_container),
+    actor: AuthPrincipal = Depends(get_actor),
+) -> Response:
+    data, meta = await _run(
+        request,
+        container.evaluations.list_audit_events(
+            actor,
+            evaluationId,
+            page=page,
+            page_size=pageSize,
+            actor_filter=actorFilter,
+            action=action,
+            resource=resource,
+            date_from=dateFrom,
+            date_to=dateTo,
+        ),
+    )
+    return success(data, request=request, meta=meta)
 
 
 @router.patch("/evaluations/{evaluationId}")

@@ -199,6 +199,14 @@ def test_complete_internal_and_supplier_http_flow() -> None:
     detail = _data(client.get(f"/api/v1/evaluations/{evaluation_id}"))
     assert detail["id"] == evaluation_id
     assert detail["description"] == "已更新说明"
+    audit_response = client.get(
+        f"/api/v1/evaluations/{evaluation_id}/audit-events",
+        params={"action": "evaluation.created", "page": 1, "pageSize": 10},
+    )
+    audit_events = _data(audit_response)
+    assert audit_response.json()["meta"]["total"] == 1
+    assert audit_events[0]["aggregateId"] == evaluation_id
+    assert audit_events[0]["action"] == "evaluation.created"
     assert _data(client.post(f"/api/v1/evaluations/{evaluation_id}/validate"))["valid"] is True
     assert _data(client.get(f"/api/v1/evaluations/{evaluation_id}/preview"))["validation"]["valid"] is True
 
