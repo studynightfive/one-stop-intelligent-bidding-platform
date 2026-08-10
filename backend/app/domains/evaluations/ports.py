@@ -52,6 +52,8 @@ class JobRefSnapshot:
     progress_percent: int
     created_at: datetime
     current_step: str | None = None
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
