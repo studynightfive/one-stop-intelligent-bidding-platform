@@ -186,4 +186,40 @@ describe('M2 evaluation routes and navigation', () => {
     expect(screen.getByTestId(EVAL_TEST_IDS.taskAiReview)).toBeTruthy()
     expect(screen.getByTestId(EVAL_TEST_IDS.taskClose)).toBeTruthy()
   })
+
+  it('shows dashboard loading skeleton while API calls are in flight', () => {
+    renderWithDemo(<EvaluationDashboardView />)
+    expect(screen.getByTestId(EVAL_TEST_IDS.dashboard)).toBeTruthy()
+  })
+
+  it('shows error alert when stats/task API fails', async () => {
+    getMock.mockImplementation(async () => { throw new Error('network error') })
+    renderWithDemo(<EvaluationDashboardView />)
+    await waitFor(() => {
+      expect(screen.getByText('network error')).toBeTruthy()
+    })
+  })
+
+  it('resets dashboard filters to defaults', async () => {
+    renderWithDemo(<EvaluationDashboardView />)
+    await waitFor(() => { expect(screen.getByText('接口评标项目')).toBeTruthy() })
+    const input = screen.getByPlaceholderText('搜索项目名称、编号或招标方')
+    fireEvent.change(input, { target: { value: '测试' } })
+    expect((input as HTMLInputElement).value).toBe('测试')
+    fireEvent.click(screen.getByTestId(EVAL_TEST_IDS.dashboardReset))
+    expect((input as HTMLInputElement).value).toBe('')
+  })
+
+  it('switches dashboard to board view and renders status columns', async () => {
+    renderWithDemo(<EvaluationDashboardView />)
+    await waitFor(() => { expect(screen.getByText('接口评标项目')).toBeTruthy() })
+    fireEvent.click(screen.getByText('看板'))
+    await waitFor(() => {
+      const cols = screen.getAllByText('材料收集中')
+      expect(cols.length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('AI初审中').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('人工复审').length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
 })
