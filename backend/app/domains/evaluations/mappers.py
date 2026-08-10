@@ -57,6 +57,10 @@ def job_ref_dict(job: JobRefSnapshot) -> dict[str, Any]:
     }
     if job.current_step:
         data["currentStep"] = job.current_step
+    if job.result is not None:
+        data["result"] = job.result
+    if job.error is not None:
+        data["error"] = job.error
     return data
 
 
