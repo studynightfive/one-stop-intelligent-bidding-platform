@@ -5,19 +5,34 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.dependencies import AuthenticatedUser, DBSession
 from app.core.errors.handlers import register_exception_handlers
+from app.domains.bids.container import M5BidsContainer, build_m5_bids_container_with_m4
+from app.domains.bids.http import get_actor as get_m5_actor
+from app.domains.bids.router import (
+    auth_principal_from_context as m5_auth_principal_from_context,
+)
+from app.domains.bids.router import get_container as get_m5_container
+from app.domains.bids.store import BidStore
+from app.domains.documents.repository import DocumentStore
 from app.domains.evaluations.container import M6Container, build_m6_container_with_m4
+from app.domains.evaluations.m4_adapters import M4FileServiceAdapter
 from app.domains.evaluations.ports import AuthPrincipal, RecordingPorts
 from app.domains.evaluations.router import auth_principal_from_context, get_actor, get_container
 from app.domains.evaluations.store import EvaluationStore
+from app.domains.fragments.router import get_service as get_fragment_service
+from app.domains.fragments.service import FragmentService
+from app.domains.fragments.store import FragmentStore
+from app.domains.qualifications.router import get_service as get_qualification_service
+from app.domains.qualifications.service import QualificationService
+from app.domains.qualifications.store import QualificationStore
 from app.models_registry import register_models
 
 
@@ -57,6 +72,47 @@ def _configure_m6_dependencies(app: FastAPI) -> None:
     app.dependency_overrides[get_actor] = provide_actor
 
 
+def _configure_m5_dependencies(app: FastAPI) -> None:
+    """Bridge every M5 router to shared stores and request-scoped M4 ports."""
+
+    bid_store = BidStore()
+    document_store = DocumentStore()
+    qualification_store = QualificationStore()
+    fragment_store = FragmentStore()
+
+    async def provide_container(db: DBSession) -> M5BidsContainer:
+        return build_m5_bids_container_with_m4(
+            db,
+            store=bid_store,
+            document_store=document_store,
+            qualification_store=qualification_store,
+            fragment_store=fragment_store,
+            files=M4FileServiceAdapter(db),
+        )
+
+    async def provide_qualification_service(
+        container: Annotated[M5BidsContainer, Depends(provide_container)],
+    ) -> QualificationService:
+        return container.qualifications
+
+    async def provide_fragment_service(
+        container: Annotated[M5BidsContainer, Depends(provide_container)],
+    ) -> FragmentService:
+        return container.fragments
+
+    async def provide_actor(current_user: AuthenticatedUser) -> AuthPrincipal:
+        return m5_auth_principal_from_context(current_user)
+
+    app.state.m5_bid_store = bid_store
+    app.state.m5_document_store = document_store
+    app.state.m5_qualification_store = qualification_store
+    app.state.m5_fragment_store = fragment_store
+    app.dependency_overrides[get_m5_container] = provide_container
+    app.dependency_overrides[get_qualification_service] = provide_qualification_service
+    app.dependency_overrides[get_fragment_service] = provide_fragment_service
+    app.dependency_overrides[get_m5_actor] = provide_actor
+
+
 def create_app() -> FastAPI:
     register_models()
     app = FastAPI(
@@ -75,6 +131,7 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-Request-Id", "Idempotency-Key", "If-Match"],
     )
     register_exception_handlers(app)
+    _configure_m5_dependencies(app)
     _configure_m6_dependencies(app)
     app.include_router(api_router, prefix="/api/v1")
     app.openapi = _load_contract  # type: ignore[method-assign]
