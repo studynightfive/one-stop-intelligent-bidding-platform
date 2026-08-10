@@ -93,23 +93,24 @@ function readStoredState() {
 }
 
 export function DemoProvider({ children }: { children: React.ReactNode }) {
-  const stored = typeof window === 'undefined' ? null : readStoredState()
   const mockMode = shouldUseMocks()
+  const stored = mockMode && typeof window !== 'undefined' ? readStoredState() : null
   const [loggedIn, setLoggedIn] = useState(() => (
     mockMode ? sessionStorage.getItem('bid-demo-logged-in') === 'true' : Boolean(readAccessToken())
   ))
   const [authReady, setAuthReady] = useState(() => mockMode || !readAccessToken())
   const [currentUser, setCurrentUser] = useState<User | null>(() => mockMode ? MOCK_USER : null)
-  const [permissions, setPermissions] = useState<string[]>(DEMO_PERMISSIONS)
-  const [bidTasks, setBidTasks] = useState<any[]>(stored?.bidTasks || clone(initialBidTasks))
-  const [taskMaterials, setTaskMaterials] = useState<Record<string, any[]>>(stored?.taskMaterials || buildInitialMaterials())
-  const [evaluationTasks, setEvaluationTasks] = useState<any[]>(stored?.evaluationTasks || clone(initialEvaluationTasks))
-  const [qualifications, setQualifications] = useState<any[]>(stored?.qualifications || clone(initialQualifications))
-  const [fragments, setFragments] = useState<any[]>(stored?.fragments || clone(initialFragments))
-  const [users, setUsers] = useState<any[]>(stored?.users || clone(initialUsers))
-  const [appNotifications, setAppNotifications] = useState<any[]>(stored?.appNotifications || buildInitialNotifications())
+  const [permissions, setPermissions] = useState<string[]>(() => mockMode ? DEMO_PERMISSIONS : [])
+  const [bidTasks, setBidTasks] = useState<any[]>(() => mockMode ? stored?.bidTasks || clone(initialBidTasks) : [])
+  const [taskMaterials, setTaskMaterials] = useState<Record<string, any[]>>(() => mockMode ? stored?.taskMaterials || buildInitialMaterials() : {})
+  const [evaluationTasks, setEvaluationTasks] = useState<any[]>(() => mockMode ? stored?.evaluationTasks || clone(initialEvaluationTasks) : [])
+  const [qualifications, setQualifications] = useState<any[]>(() => mockMode ? stored?.qualifications || clone(initialQualifications) : [])
+  const [fragments, setFragments] = useState<any[]>(() => mockMode ? stored?.fragments || clone(initialFragments) : [])
+  const [users, setUsers] = useState<any[]>(() => mockMode ? stored?.users || clone(initialUsers) : [])
+  const [appNotifications, setAppNotifications] = useState<any[]>(() => mockMode ? stored?.appNotifications || buildInitialNotifications() : [])
 
   useEffect(() => {
+    if (!mockMode) return
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       bidTasks,
       taskMaterials,
@@ -119,7 +120,7 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
       users,
       appNotifications,
     }))
-  }, [bidTasks, taskMaterials, evaluationTasks, qualifications, fragments, users, appNotifications])
+  }, [mockMode, bidTasks, taskMaterials, evaluationTasks, qualifications, fragments, users, appNotifications])
 
   useEffect(() => {
     if (mockMode || !readAccessToken()) return
@@ -149,7 +150,7 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
       setPermissions(session.permissions)
       setCurrentUser(session.user)
     }
-    sessionStorage.setItem('bid-demo-logged-in', 'true')
+    if (mockMode) sessionStorage.setItem('bid-demo-logged-in', 'true')
     setLoggedIn(true)
   }, [mockMode])
 
@@ -161,71 +162,71 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
         // The local session must still be cleared when the API is unavailable.
       }
     }
-    sessionStorage.removeItem('bid-demo-logged-in')
+    if (mockMode) sessionStorage.removeItem('bid-demo-logged-in')
     if (!mockMode) setCurrentUser(null)
     setLoggedIn(false)
   }, [mockMode])
 
-  const addBidTask = (task: any, materials = clone(initialMaterials)) => {
+  const addBidTask = useCallback((task: any, materials = clone(initialMaterials)) => {
     setBidTasks(prev => [task, ...prev])
     setTaskMaterials(prev => ({ ...prev, [task.id]: clone(materials) }))
-  }
+  }, [])
 
-  const updateBidTask = (id: string, patch: Record<string, any>) => {
+  const updateBidTask = useCallback((id: string, patch: Record<string, any>) => {
     setBidTasks(prev => prev.map(task => task.id === id ? { ...task, ...patch } : task))
-  }
+  }, [])
 
   const getTaskMaterials = useCallback((id?: string) => {
-    if (!id) return clone(initialMaterials)
-    return taskMaterials[id] || clone(initialMaterials)
-  }, [taskMaterials])
+    if (!id) return mockMode ? clone(initialMaterials) : []
+    return taskMaterials[id] || (mockMode ? clone(initialMaterials) : [])
+  }, [mockMode, taskMaterials])
 
-  const updateTaskMaterial = (taskId: string, materialId: string, patch: Record<string, any>) => {
+  const updateTaskMaterial = useCallback((taskId: string, materialId: string, patch: Record<string, any>) => {
     setTaskMaterials(prev => ({
       ...prev,
-      [taskId]: (prev[taskId] || clone(initialMaterials)).map(item => item.id === materialId ? { ...item, ...patch } : item),
+      [taskId]: (prev[taskId] || (mockMode ? clone(initialMaterials) : [])).map(item => item.id === materialId ? { ...item, ...patch } : item),
     }))
-  }
+  }, [mockMode])
 
-  const addTaskMaterial = (taskId: string, material: any) => {
+  const addTaskMaterial = useCallback((taskId: string, material: any) => {
     setTaskMaterials(prev => ({
       ...prev,
-      [taskId]: [...(prev[taskId] || clone(initialMaterials)), material],
+      [taskId]: [...(prev[taskId] || (mockMode ? clone(initialMaterials) : [])), material],
     }))
-  }
+  }, [mockMode])
 
-  const removeTaskMaterial = (taskId: string, materialId: string) => {
+  const removeTaskMaterial = useCallback((taskId: string, materialId: string) => {
     setTaskMaterials(prev => ({
       ...prev,
-      [taskId]: (prev[taskId] || clone(initialMaterials)).filter(item => item.id !== materialId),
+      [taskId]: (prev[taskId] || (mockMode ? clone(initialMaterials) : [])).filter(item => item.id !== materialId),
     }))
-  }
+  }, [mockMode])
 
-  const addEvaluationTask = (task: any) => setEvaluationTasks(prev => [task, ...prev])
-  const updateEvaluationTask = (id: string, patch: Record<string, any>) => {
+  const addEvaluationTask = useCallback((task: any) => setEvaluationTasks(prev => [task, ...prev]), [])
+  const updateEvaluationTask = useCallback((id: string, patch: Record<string, any>) => {
     setEvaluationTasks(prev => prev.map(task => task.id === id ? { ...task, ...patch } : task))
-  }
+  }, [])
 
-  const markNotificationRead = (id: string) => {
+  const markNotificationRead = useCallback((id: string) => {
     setAppNotifications(prev => prev.map(item => item.id === id ? { ...item, isRead: true } : item))
-  }
+  }, [])
 
-  const markAllNotificationsRead = () => {
+  const markAllNotificationsRead = useCallback(() => {
     setAppNotifications(prev => prev.map(item => ({ ...item, isRead: true })))
-  }
+  }, [])
 
-  const resetDemoData = () => {
-    setBidTasks(clone(initialBidTasks))
-    setTaskMaterials(buildInitialMaterials())
-    setEvaluationTasks(clone(initialEvaluationTasks))
-    setQualifications(clone(initialQualifications))
-    setFragments(clone(initialFragments))
-    setUsers(clone(initialUsers))
-    setAppNotifications(buildInitialNotifications())
+  const resetDemoData = useCallback(() => {
+    setBidTasks(mockMode ? clone(initialBidTasks) : [])
+    setTaskMaterials(mockMode ? buildInitialMaterials() : {})
+    setEvaluationTasks(mockMode ? clone(initialEvaluationTasks) : [])
+    setQualifications(mockMode ? clone(initialQualifications) : [])
+    setFragments(mockMode ? clone(initialFragments) : [])
+    setUsers(mockMode ? clone(initialUsers) : [])
+    setAppNotifications(mockMode ? buildInitialNotifications() : [])
     localStorage.removeItem(STORAGE_KEY)
     localStorage.removeItem('bid-platform-evaluation-draft-v2')
     for (const id of ['S01', 'S02', 'S03', 'S04']) localStorage.removeItem(`supplier-portal-draft-${id}`)
-  }
+  }, [mockMode])
 
   const value = useMemo<DemoContextValue>(() => ({
     loggedIn,
@@ -255,7 +256,13 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     markAllNotificationsRead,
     permissions,
     resetDemoData,
-  }), [loggedIn, authReady, currentUser, login, logout, bidTasks, evaluationTasks, qualifications, fragments, users, appNotifications, getTaskMaterials, permissions])
+  }), [
+    loggedIn, authReady, currentUser, login, logout, bidTasks, addBidTask, updateBidTask,
+    getTaskMaterials, updateTaskMaterial, addTaskMaterial, removeTaskMaterial,
+    evaluationTasks, addEvaluationTask, updateEvaluationTask, qualifications, fragments,
+    users, appNotifications, markNotificationRead, markAllNotificationsRead, permissions,
+    resetDemoData,
+  ])
 
   return <DemoContext.Provider value={value}>{children}</DemoContext.Provider>
 }
