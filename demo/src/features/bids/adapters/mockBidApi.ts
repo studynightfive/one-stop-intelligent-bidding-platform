@@ -3,6 +3,8 @@ import type { BidApiPort } from './bidApiPort'
 import { newIdempotencyKey, sha256Hex } from './cryptoUtils'
 import { filterTasksForListQuery, paginateItems } from './paginateLocal'
 import type {
+  CreateBidReviewRequest,
+  CreateBidTaskRequest,
   CreateUploadSessionRequest,
   DocumentDiff,
   DocumentVersion,
@@ -25,6 +27,7 @@ let taskSource: () => BidTaskViewModel[] = () => []
 const sessions = new Map<string, SessionRecord>()
 const versionsByTask = new Map<string, DocumentVersion[]>()
 const fileBlobs = new Map<string, Blob>()
+const createdTasks = new Map<string, BidTaskViewModel>()
 
 export function setMockBidTaskSource(getter: () => BidTaskViewModel[]) {
   taskSource = getter
@@ -34,6 +37,7 @@ export function resetMockBidApiState() {
   sessions.clear()
   versionsByTask.clear()
   fileBlobs.clear()
+  createdTasks.clear()
 }
 
 function delay(ms = 40) {
@@ -106,6 +110,79 @@ export function createMockBidApi(): BidApiPort {
       await delay(30)
       const filtered = filterTasksForListQuery(taskSource(), query)
       return paginateItems(filtered, query.page ?? 1, query.pageSize ?? 20)
+    },
+
+    async getBidTask(taskId: string): Promise<BidTaskViewModel> {
+      await delay(20)
+      const task = createdTasks.get(taskId) || taskSource().find(item => item.id === taskId)
+      if (!task) throw new Error('BID_TASK_NOT_FOUND')
+      return { ...task }
+    },
+
+    async createBidTask(body: CreateBidTaskRequest): Promise<BidTaskViewModel> {
+      await delay(60)
+      const task: BidTaskViewModel = {
+        id: `TASK-DEMO-${Date.now()}`,
+        projectName: body.projectName,
+        tenderNo: body.tenderNo || '',
+        tenderEntity: body.tenderEntity || '',
+        deadline: body.deadline.slice(0, 10),
+        status: 'draft',
+        currentStep: 1,
+        progress: 5,
+        assignee: '张明远',
+        materialTotal: 0,
+        materialHave: 0,
+        materialMissing: 0,
+        createdAt: new Date().toISOString(),
+        tags: body.tags || [],
+      }
+      createdTasks.set(task.id, task)
+      return { ...task }
+    },
+
+    async parseBidTask(taskId: string, _idempotencyKey: string): Promise<JobRef> {
+      await delay(120)
+      const task = createdTasks.get(taskId)
+      if (task) {
+        createdTasks.set(taskId, {
+          ...task,
+          status: 'material_prep',
+          currentStep: 3,
+          progress: 35,
+          materialTotal: 23,
+          materialHave: 13,
+          materialMissing: 10,
+        })
+      }
+      return {
+        id: `job-parse-${Date.now()}`,
+        type: 'bid.parse_tender',
+        status: 'succeeded',
+        progressPercent: 100,
+        currentStep: 'done',
+        createdAt: new Date().toISOString(),
+      }
+    },
+
+    async startBidReview(
+      taskId: string,
+      _body: CreateBidReviewRequest,
+      _idempotencyKey: string,
+    ): Promise<JobRef> {
+      await delay(160)
+      const task = createdTasks.get(taskId)
+      if (task) {
+        createdTasks.set(taskId, { ...task, status: 'ai_review', currentStep: 6, progress: 80 })
+      }
+      return {
+        id: `job-review-${Date.now()}`,
+        type: 'bid.review',
+        status: 'succeeded',
+        progressPercent: 100,
+        currentStep: 'done',
+        createdAt: new Date().toISOString(),
+      }
     },
 
     async createUploadSession(body: CreateUploadSessionRequest): Promise<UploadSession> {
@@ -277,6 +354,18 @@ export function createMockBidApi(): BidApiPort {
         progressPercent: 100,
         currentStep: 'done',
         result: { versionId: version.id, versionNumber: nextNumber },
+        createdAt: new Date().toISOString(),
+      }
+    },
+
+    async getJob(jobId): Promise<JobRef> {
+      await delay(20)
+      return {
+        id: jobId,
+        type: 'bid_generate',
+        status: 'succeeded',
+        progressPercent: 100,
+        currentStep: 'done',
         createdAt: new Date().toISOString(),
       }
     },
