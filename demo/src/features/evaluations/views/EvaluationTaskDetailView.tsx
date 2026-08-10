@@ -293,7 +293,20 @@ function ScoringPanel({ category, detail, scores, drafts, setDrafts, onSave, onC
 }
 
 function SummaryPanel({ detail, ranking, reports, mockMode, onGenerate, onDownload }: { detail: EvaluationTaskDetail; ranking: EvaluationRanking | null; reports: EvaluationReport[]; mockMode: boolean; onGenerate: () => Promise<void>; onDownload: (report: EvaluationReport) => Promise<void> }) {
-  return <div className="space-y-5"><Card size="small" title="综合排名"><Table rowKey="supplierId" dataSource={ranking?.rows || []} locale={{ emptyText: '评分确认后生成综合排名' }} columns={[{ title: '排名', dataIndex: 'rank', render: value => <strong>{value}</strong> }, { title: '供应商', dataIndex: 'supplierName' }, { title: '资格分', dataIndex: 'qualificationScore' }, { title: '技术分', dataIndex: 'technicalScore' }, { title: '商务分', dataIndex: 'commercialScore' }, { title: '总分', dataIndex: 'totalScore', render: value => <strong className="text-[#2563EB]">{value}</strong> }, { title: '状态', dataIndex: 'status', render: value => <Tag>{value}</Tag> }]} /></Card><Card size="small" title="评标报告" extra={<Button type="primary" icon={<FileBarChart size={14} />} onClick={() => void onGenerate().catch(error => message.error(error instanceof Error ? error.message : '报告生成失败'))}>生成 DOCX / PDF 报告</Button>}><Table rowKey="id" dataSource={reports} locale={{ emptyText: mockMode ? '点击生成演示报告' : '尚未生成报告' }} columns={[{ title: '格式', dataIndex: 'format', render: value => <Tag>{value.toUpperCase()}</Tag> }, { title: '版本', dataIndex: 'versionNumber' }, { title: '文件', render: (_, row) => row.file.fileName }, { title: '生成时间', dataIndex: 'createdAt', render: formatDate }, { title: '操作', render: (_, row) => <Button size="small" icon={<Download size={12} />} onClick={() => void onDownload(row).catch(error => message.error(error instanceof Error ? error.message : '报告下载失败'))}>下载</Button> }]} /></Card><Alert type="info" showIcon message={`项目“${detail.projectName}”的排名、报告与关闭结果均由服务端留痕。`} /></div>
+  const [generating, setGenerating] = useState(false)
+  const canGenerate = ['human_review', 'completed'].includes(detail.status)
+  const generate = async () => {
+    if (!canGenerate || generating) return
+    setGenerating(true)
+    try {
+      await onGenerate()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '报告生成失败')
+    } finally {
+      setGenerating(false)
+    }
+  }
+  return <div className="space-y-5"><Card size="small" title="综合排名"><Table rowKey="supplierId" dataSource={ranking?.rows || []} locale={{ emptyText: '评分确认后生成综合排名' }} columns={[{ title: '排名', dataIndex: 'rank', render: value => <strong>{value}</strong> }, { title: '供应商', dataIndex: 'supplierName' }, { title: '资格分', dataIndex: 'qualificationScore' }, { title: '技术分', dataIndex: 'technicalScore' }, { title: '商务分', dataIndex: 'commercialScore' }, { title: '总分', dataIndex: 'totalScore', render: value => <strong className="text-[#2563EB]">{value}</strong> }, { title: '状态', dataIndex: 'status', render: value => <Tag>{value}</Tag> }]} /></Card><Card size="small" title="评标报告" extra={<Button type="primary" title={canGenerate ? undefined : '进入人工复审或完成评审后才可生成报告'} disabled={!canGenerate} loading={generating} icon={<FileBarChart size={14} />} onClick={() => void generate()}>生成 DOCX / PDF 报告</Button>}><Table rowKey="id" dataSource={reports} locale={{ emptyText: mockMode ? '点击生成演示报告' : '尚未生成报告' }} columns={[{ title: '格式', dataIndex: 'format', render: value => <Tag>{value.toUpperCase()}</Tag> }, { title: '版本', dataIndex: 'versionNumber' }, { title: '文件', render: (_, row) => row.file.fileName }, { title: '生成时间', dataIndex: 'createdAt', render: formatDate }, { title: '操作', render: (_, row) => <Button size="small" icon={<Download size={12} />} onClick={() => void onDownload(row).catch(error => message.error(error instanceof Error ? error.message : '报告下载失败'))}>下载</Button> }]} /></Card><Alert type="info" showIcon message={`项目“${detail.projectName}”的排名、报告与关闭结果均由服务端留痕。`} /></div>
 }
 
 function AuditPanel({ events }: { events: AuditEvent[] }) {
