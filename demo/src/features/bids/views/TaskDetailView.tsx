@@ -34,6 +34,9 @@ import {
   toggleIdInSelection,
 } from '../hooks/materialSelection'
 import { BID_STEP_GUIDE, buildBidWorkflowPatch, nextBidStep, normalizeBidStep, prevBidStep } from '../hooks/bidWorkflow'
+import { getBidApi } from '../adapters/getBidApi'
+import { newIdempotencyKey } from '../adapters/cryptoUtils'
+import { waitForBidJob } from '../adapters/bidJobPolling'
 
 const stepIcons: Record<number, any> = {
   1: Upload, 2: FileSearch, 3: ClipboardList, 4: Download,
@@ -71,16 +74,30 @@ export default function TaskDetailView() {
     technical: '技术标'
   }
 
-  const runReview = () => {
+  const runReview = async () => {
+    if (!task) return
     setReviewProcessing(true)
     setReviewDone(false)
     message.loading({ content: 'AI 正在重新检查材料与文档一致性…', key: 'task-review', duration: 0 })
-    window.setTimeout(() => {
+    try {
+      const initialJob = await getBidApi().startBidReview(task.id, {
+        types: ['signature', 'price', 'content', 'consistency'],
+        fileVersionIds: [],
+      }, newIdempotencyKey('review'))
+      await waitForBidJob(initialJob)
+      const refreshed = await getBidApi().getBidTask(task.id)
+      updateBidTask(task.id, refreshed)
       setReviewProcessing(false)
       setReviewDone(true)
-      // 重新审核只刷新本 Tab 结果，不推进顶部七步进度（避免未做材料/上传就被标成全部完成）
       message.success({ content: '复审完成，已更新审核结果', key: 'task-review' })
-    }, 1400)
+    } catch (error) {
+      setReviewProcessing(false)
+      setReviewDone(false)
+      message.error({
+        content: error instanceof Error ? error.message : 'AI 复审失败，请稍后重试',
+        key: 'task-review',
+      })
+    }
   }
 
   const applyWorkflowStep = (step: number) => {
@@ -260,7 +277,7 @@ export default function TaskDetailView() {
               {stepGuide.nextLabel || '下一步'}
             </Button>
           )}
-          <Button type={stepNow < 7 ? 'default' : 'primary'} icon={<FileOutput size={14} />} onClick={() => { setActiveTab('output'); downloadDemoFile(`${task.projectName}-投标文件说明.txt`, `${task.projectName}\n当前演示已生成投标文件包。`) }}>导出投标文件</Button>
+          <Button type={stepNow < 7 ? 'default' : 'primary'} icon={<FileOutput size={14} />} onClick={() => setActiveTab('output')}>进入文档输出</Button>
         </div>
       </div>
 

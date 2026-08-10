@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Progress, Result, Steps, Upload, message } from 'antd'
 import { ArrowLeft, ArrowRight, CheckCircle2, FileSearch, FileText, Plus, Save, Sparkles, UploadCloud } from 'lucide-react'
 import dayjs from 'dayjs'
-import { currentUser } from '../../../mock/data'
 import { useDemo } from '../../../context/DemoContext'
 import { BID_ACCEPT_UPLOAD_TYPES, BID_MAX_UPLOAD_BYTES, BID_TEST_IDS } from '../constants'
 import { clearBidCreateDraft, loadBidCreateDraft, saveBidCreateDraft } from '../adapters/createDraftStorage'
@@ -19,12 +18,17 @@ import {
   BidTimeoutState,
 } from '../components/BidPageStates'
 import { BidUiStateSwitcher } from '../components/BidUiStateSwitcher'
+import { getBidApi } from '../adapters/getBidApi'
+import { getCurrentBidUserId } from '../adapters/bidEnv'
+import { newIdempotencyKey } from '../adapters/cryptoUtils'
+import { waitForBidJob } from '../adapters/bidJobPolling'
+import type { BidTaskViewModel } from '../types'
 
 const { Dragger } = Upload
 
 export default function BidCreateView() {
   const navigate = useNavigate()
-  const { bidTasks, addBidTask } = useDemo()
+  const { addBidTask } = useDemo()
   const [form] = Form.useForm()
   const [current, setCurrent] = useState(0)
   const [fileList, setFileList] = useState<any[]>(() => {
@@ -35,7 +39,7 @@ export default function BidCreateView() {
   })
   const [parseOutcome, setParseOutcome] = useState<BidParseOutcome>('idle')
   const [tenderFileId, setTenderFileId] = useState<string | undefined>(() => loadBidCreateDraft()?.tenderFileId)
-  const failNextParse = useRef(false)
+  const [createdTask, setCreatedTask] = useState<BidTaskViewModel | null>(null)
   const draftNoticeShown = useRef(false)
   const { progress: uploadProgress, upload: resumableUpload, cancel: cancelUpload, reset: resetUpload } = useResumableUpload()
   const { status: uiStatus, override, setUiOverride, retry } = useBidUiState({ bootstrapMs: 200 })
@@ -72,7 +76,7 @@ export default function BidCreateView() {
     message.success('草稿已保存到本机')
   }
 
-  const fillExample = () => {
+  const fillExample = async () => {
     form.setFieldsValue({
       projectName: '某市政务云扩容采购项目',
       tenderNo: `DEMO-${new Date().getFullYear()}-001`,
@@ -80,13 +84,27 @@ export default function BidCreateView() {
       deadline: dayjs().add(14, 'day'),
       budget: 9800000,
     })
-    setFileList([{ uid: 'demo-file', name: '政务云扩容项目招标文件.pdf', status: 'done', size: 4.8 * 1024 * 1024 }])
-    setTenderFileId('file-demo-example')
     resetUpload()
-    message.success('已填入示例招标文件和项目信息')
+    setCreatedTask(null)
+    setTenderFileId(undefined)
+    const demoFile = new File(
+      ['%PDF-1.4\n% 智能招投标平台演示招标文件\n项目：某市政务云扩容采购项目\n%%EOF\n'],
+      '政务云扩容项目招标文件.pdf',
+      { type: 'application/pdf' },
+    )
+    setFileList([demoFile as any])
+    message.loading({ content: '正在上传示例招标文件…', key: 'example-upload', duration: 0 })
+    try {
+      const ref = await resumableUpload(demoFile, 'tender')
+      setTenderFileId(ref.id)
+      message.success({ content: '示例数据与招标文件已就绪', key: 'example-upload' })
+    } catch {
+      setFileList([])
+      message.error({ content: '示例文件上传失败，请重试或选择本地文件', key: 'example-upload' })
+    }
   }
 
-  const startParsing = async (forceFail = false) => {
+  const startParsing = async () => {
     try {
       await form.validateFields()
     } catch {
@@ -103,42 +121,45 @@ export default function BidCreateView() {
     }
     setCurrent(1)
     setParseOutcome('running')
-    const shouldFail = forceFail || failNextParse.current
-    failNextParse.current = false
-    window.setTimeout(() => {
-      if (shouldFail) {
-        setParseOutcome('failed')
-        message.error('招标文件解析失败，请重试或更换文件')
-        return
+    try {
+      const values = form.getFieldsValue(true)
+      let task = createdTask
+      if (!task) {
+        task = await getBidApi().createBidTask({
+          projectName: values.projectName,
+          tenderNo: values.tenderNo,
+          tenderEntity: values.tenderEntity,
+          deadline: values.deadline.toISOString(),
+          assigneeId: getCurrentBidUserId(),
+          tenderFileId,
+          tags: ['Demo新建', 'AI解析'],
+          description: values.budget ? `项目预算：${values.budget} 元` : undefined,
+        })
+        setCreatedTask(task)
       }
+      const initialJob = await getBidApi().parseBidTask(task.id, newIdempotencyKey('parse'))
+      await waitForBidJob(initialJob)
+      const refreshed = await getBidApi().getBidTask(task.id)
+      if (!['material_prep', 'ai_review', 'pending_output', 'completed'].includes(refreshed.status)) {
+        throw new Error('解析任务已结束，但解析结果尚未写入投标任务')
+      }
+      setCreatedTask(refreshed)
       setParseOutcome('success')
-    }, 1200)
+    } catch (error) {
+      setParseOutcome('failed')
+      message.error(error instanceof Error ? error.message : '招标文件解析失败，请重试或更换文件')
+    }
   }
 
   const createTask = () => {
-    const values = form.getFieldsValue(true)
-    const nextNumber = String(bidTasks.length + 1).padStart(3, '0')
-    const id = `TASK-2026-${nextNumber}`
-    addBidTask({
-      id,
-      projectName: values.projectName,
-      tenderNo: values.tenderNo,
-      deadline: values.deadline?.format('YYYY-MM-DD') || dayjs().add(14, 'day').format('YYYY-MM-DD'),
-      status: 'material_prep',
-      currentStep: 3,
-      progress: 35,
-      assignee: currentUser.name,
-      tenderFileId,
-      materialTotal: 23,
-      materialHave: 13,
-      materialMissing: 10,
-      tenderEntity: values.tenderEntity,
-      createdAt: dayjs().format('YYYY-MM-DD'),
-      tags: ['Demo新建', 'AI已解析'],
-    })
+    if (!createdTask) {
+      message.warning('请先完成招标文件解析')
+      return
+    }
+    addBidTask({ ...createdTask, tenderFileId })
     clearBidCreateDraft()
     message.success('投标任务已创建，AI材料清单已生成')
-    navigate(`/tasks/${id}`)
+    navigate(`/tasks/${createdTask.id}`)
   }
 
   const parsing = parseOutcome === 'running'
@@ -217,7 +238,7 @@ export default function BidCreateView() {
               <h2 className="text-base font-semibold text-[#1E293B]">招标文件与项目信息</h2>
               <div className="flex gap-2">
                 <Button icon={<Save size={14} />} onClick={persistDraft} data-testid={BID_TEST_IDS.createSaveDraft}>保存草稿</Button>
-                <Button icon={<Sparkles size={14} />} onClick={fillExample}>填入示例数据</Button>
+                <Button icon={<Sparkles size={14} />} onClick={() => void fillExample()}>填入示例数据</Button>
               </div>
             </div>
             <Dragger
@@ -232,6 +253,7 @@ export default function BidCreateView() {
                 }
                 setFileList([file as any])
                 setTenderFileId(undefined)
+                setCreatedTask(null)
                 void (async () => {
                   try {
                     const ref = await resumableUpload(file, 'tender')
@@ -268,6 +290,7 @@ export default function BidCreateView() {
                 resetUpload()
                 setFileList([])
                 setTenderFileId(undefined)
+                setCreatedTask(null)
                 form.setFieldsValue(toFormValuesFromExtract({}))
               }}
               className="!mb-5"
@@ -354,8 +377,8 @@ export default function BidCreateView() {
                 title="招标文件解析失败"
                 subTitle="可能是文件损坏、格式不支持或解析服务超时。可重试或返回更换文件。"
                 extra={[
-                  <Button key="retry" type="primary" data-testid={BID_TEST_IDS.createRetryParse} onClick={() => startParsing(false)}>重试解析</Button>,
-                  <Button key="back" onClick={() => { setCurrent(0); setParseOutcome('idle') }}>返回修改</Button>,
+                  <Button key="retry" type="primary" data-testid={BID_TEST_IDS.createRetryParse} onClick={() => void startParsing()}>重试解析</Button>,
+                  <Button key="back" onClick={() => { setCurrent(0); setParseOutcome('idle'); setCreatedTask(null) }}>返回修改</Button>,
                 ]}
               />
             )}
@@ -396,7 +419,7 @@ export default function BidCreateView() {
 
       <div className="flex justify-between mt-4">
         <Button disabled={current === 0 || parsing} onClick={() => setCurrent(value => value - 1)} icon={<ArrowLeft size={14} />}>上一步</Button>
-        {current === 0 && <Button type="primary" data-testid={BID_TEST_IDS.createStartParse} onClick={() => startParsing(false)}>开始 AI 解析 <ArrowRight size={14} /></Button>}
+        {current === 0 && <Button type="primary" data-testid={BID_TEST_IDS.createStartParse} onClick={() => void startParsing()}>开始 AI 解析 <ArrowRight size={14} /></Button>}
         {current === 1 && parsed && <Button type="primary" onClick={() => setCurrent(2)}>下一步 <ArrowRight size={14} /></Button>}
         {current === 2 && <Button type="primary" icon={<Plus size={14} />} data-testid={BID_TEST_IDS.createSubmit} onClick={createTask}>创建投标任务</Button>}
       </div>
