@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.core.errors import FileRejectedError, ForbiddenError, NotFoundError, ValidationError
 from app.domains.audit.api import export_audit_events, list_audit_events
+from app.domains.auth.api import auth as auth_api
+from app.domains.auth.schemas.auth import LoginRequest
 from app.domains.files.api import files as files_api
 from app.domains.files.schemas.file import CompleteUploadRequest
 from app.domains.jobs.api import jobs as jobs_api
@@ -25,6 +28,56 @@ from app.domains.settings.services.settings_service import SettingsService
 
 def _current_user() -> dict[str, str]:
     return {"id": str(uuid4()), "tenant_id": str(uuid4()), "role": "admin"}
+
+
+@pytest.mark.asyncio
+async def test_login_api_returns_contract_envelope_and_refresh_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(UTC)
+    user = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        email="admin@example.com",
+        name="Admin",
+        phone=None,
+        role=SimpleNamespace(value="admin"),
+        department="PMO",
+        status=SimpleNamespace(value="active"),
+        last_login_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    service = SimpleNamespace(
+        authenticate=AsyncMock(return_value=user),
+        create_tokens=AsyncMock(
+            return_value={
+                "access_token": "access-token",
+                "refresh_token": "refresh-token",
+                "expires_in": 900,
+            }
+        ),
+    )
+    monkeypatch.setattr(auth_api, "AuthService", lambda _db: service)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/login",
+            "headers": [(b"x-request-id", b"auth-request")],
+        }
+    )
+
+    response = await auth_api.login(
+        LoginRequest(email="admin@example.com", password="DemoAdmin123!"),
+        request,
+        object(),  # type: ignore[arg-type]
+    )
+    body = json.loads(response.body)
+    assert body["success"] is True
+    assert body["requestId"] == "auth-request"
+    assert body["data"]["accessToken"] == "access-token"
+    assert body["data"]["user"]["tenantId"] == str(user.tenant_id)
+    assert body["data"]["permissions"] == ["*"]
+    assert "refresh_token=refresh-token" in response.headers["set-cookie"]
 
 
 def _session() -> SimpleNamespace:
