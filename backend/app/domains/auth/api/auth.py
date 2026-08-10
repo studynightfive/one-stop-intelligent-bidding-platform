@@ -15,7 +15,6 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from app.core.dependencies import AuthenticatedUser, DBSession
@@ -24,6 +23,8 @@ from app.core.errors import (
     InvalidCredentialsError,
     TokenExpiredError,
 )
+from app.core.http import success_response
+from app.domains.auth.mappers import ROLE_PERMISSIONS, user_to_data
 from app.domains.auth.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -31,62 +32,22 @@ from app.domains.auth.schemas.auth import (
     UpdateProfileRequest,
 )
 from app.domains.auth.services.auth_service import AuthService
+from app.domains.auth.services.email_service import EmailService
 from app.domains.auth.services.user_service import UserService
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
-ROLE_PERMISSIONS: dict[str, list[str]] = {
-    "admin": ["*"],
-    "project_lead": ["projects:read", "projects:write", "bids:read", "bids:write", "bids:review", "users:read"],
-    "reviewer": ["projects:read", "bids:read", "bids:review"],
-    "member": ["projects:read", "bids:read"],
-}
-
-
-def _request_id(request: Request) -> str:
-    from uuid import uuid4
-
-    return request.headers.get("X-Request-Id") or str(uuid4())
-
-
-def _success(data: Any, request: Request, *, status_code: int = 200) -> JSONResponse:
-    request_id = _request_id(request)
-    return JSONResponse(
-        status_code=status_code,
-        content=jsonable_encoder({"success": True, "data": data, "requestId": request_id}),
-        headers={"X-Request-Id": request_id},
-    )
-
-
-def _user_to_response(user: Any) -> dict[str, Any]:
-    """Map the ORM user to the locked camelCase contract shape."""
-
-    return {
-        "id": str(user.id),
-        "tenantId": str(user.tenant_id),
-        "email": user.email,
-        "name": user.name,
-        "phone": user.phone,
-        "role": user.role.value,
-        "department": user.department,
-        "status": user.status.value,
-        "projectCount": 0,
-        "lastLoginAt": user.last_login_at,
-        "version": 1,
-        "createdAt": user.created_at,
-        "updatedAt": user.updated_at,
-    }
-
 
 def _auth_session(user: Any, tokens: dict[str, Any]) -> dict[str, Any]:
+    role = user.role.value
     return {
         "accessToken": tokens["access_token"],
         "accessTokenExpiresAt": datetime.fromtimestamp(
             datetime.now(UTC).timestamp() + tokens["expires_in"],
             tz=UTC,
         ),
-        "user": _user_to_response(user),
-        "permissions": ROLE_PERMISSIONS.get(user.role.value, []),
+        "user": user_to_data(user),
+        "permissions": ROLE_PERMISSIONS.get(role, []),
     }
 
 
@@ -112,7 +73,7 @@ async def login(
     try:
         user = await auth_service.authenticate(payload.email, payload.password)
         tokens = await auth_service.create_tokens(user)
-        response = _success(_auth_session(user, tokens), http_request)
+        response = success_response(_auth_session(user, tokens), request=http_request)
         response.set_cookie(
             key=settings.refresh_token_cookie_name,
             value=tokens["refresh_token"],
@@ -164,7 +125,7 @@ async def refresh_token(
 
         if user is None:
             raise AuthenticationError(message="用户不存在或已被禁用")
-        response = _success(_auth_session(user, tokens), request)
+        response = success_response(_auth_session(user, tokens), request=request)
         response.set_cookie(
             key=settings.refresh_token_cookie_name,
             value=tokens["refresh_token"],
@@ -210,7 +171,7 @@ async def logout(
         exp_seconds = settings.jwt_access_token_ttl_minutes * 60
         await add_token_to_blacklist(jti, exp_seconds)
 
-    response = _success({"loggedOut": True}, request)
+    response = success_response({"loggedOut": True}, request=request)
     response.delete_cookie(
         key=settings.refresh_token_cookie_name,
         secure=settings.refresh_token_cookie_secure,
@@ -245,7 +206,7 @@ async def get_current_user_info(
             detail={"code": "NOT_FOUND", "message": "用户不存在"},
         )
 
-    return _success(_user_to_response(user), request)
+    return success_response(user_to_data(user), request=request)
 
 
 @router.patch(
@@ -271,7 +232,7 @@ async def update_profile(
         phone=payload.phone,
         department=payload.department,
     )
-    return _success(_user_to_response(user), request)
+    return success_response(user_to_data(user), request=request)
 
 
 @router.post(
@@ -288,12 +249,13 @@ async def forgot_password(
     db: DBSession,
 ) -> JSONResponse:
     """忘记密码."""
-    # TODO: 实现发送重置邮件逻辑
-    # 1. 查询用户
-    # 2. 生成重置Token
-    # 3. 发送邮件
-    _ = payload, db
-    return _success({"accepted": True}, request)
+    auth_service = AuthService(db)
+    user = await auth_service.get_active_user_by_email(payload.email)
+    if user is not None:
+        token = auth_service.create_password_reset_token(user)
+        await EmailService().send_password_reset(email=user.email, name=user.name, token=token)
+    # 始终返回相同结果，避免暴露邮箱是否存在。
+    return success_response({"accepted": True}, request=request)
 
 
 @router.post(
@@ -311,8 +273,11 @@ async def reset_password(
     db: DBSession,
 ) -> JSONResponse:
     """重置密码."""
-    # TODO: 实现重置密码逻辑
-    # 1. 验证Token
-    # 2. 更新密码
-    _ = payload, db
-    return _success({"reset": True}, request)
+    try:
+        await AuthService(db).reset_password(payload.reset_token, payload.new_password)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_RESET_TOKEN", "message": exc.message},
+        ) from exc
+    return success_response({"reset": True}, request=request)

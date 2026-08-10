@@ -8,40 +8,22 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from app.core.dependencies import AuthenticatedUser, DBSession
 from app.core.errors import ForbiddenError, NotFoundError, ValidationError
-from app.domains.jobs.models.job import Job
-from app.domains.jobs.schemas.job import (
-    JobCancelResponse,
-    JobResponse,
-    RealtimeTicketRequest,
-    RealtimeTicketResponse,
-)
+from app.core.http import success_response
+from app.domains.jobs.mappers import job_to_data
+from app.domains.jobs.schemas.job import RealtimeTicketRequest
 from app.domains.jobs.services.job_dispatcher import job_dispatcher
 from app.domains.jobs.services.job_service import JobService
 
 router = APIRouter(tags=["任务"])
 
 
-def _job_to_response(job: Job) -> JobResponse:
-    """将Job模型转换为响应模型."""
-    return JobResponse(
-        id=job.id,
-        type=job.type.value,
-        status=job.status.value,
-        progress_percent=job.progress_percent,
-        current_step=job.current_step,
-        result=job.result,
-        error=job.error,
-        created_at=job.created_at,
-    )
-
-
 @router.get(
     "/jobs/{job_id}",
-    response_model=JobResponse,
     summary="获取任务详情",
     description="获取指定任务的详细信息。只能获取当前用户或同租户管理员创建的任务。",
     responses={
@@ -52,9 +34,10 @@ def _job_to_response(job: Job) -> JobResponse:
 )
 async def get_job(
     job_id: UUID,
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> JobResponse:
+) -> JSONResponse:
     """获取任务详情."""
     job_service = JobService(db)
 
@@ -69,7 +52,7 @@ async def get_job(
             refreshed = await job_dispatcher.refresh(job, service=job_service)
             if refreshed is not None:
                 job = refreshed
-        return _job_to_response(job)
+        return success_response(job_to_data(job), request=request)
     except NotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -84,7 +67,7 @@ async def get_job(
 
 @router.post(
     "/jobs/{job_id}/cancel",
-    response_model=JobCancelResponse,
+    status_code=202,
     summary="取消任务",
     description="取消一个正在排队或执行的任务。只能取消自己创建的任务或管理员可以取消任何任务。",
     responses={
@@ -96,9 +79,10 @@ async def get_job(
 )
 async def cancel_job(
     job_id: UUID,
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> JobCancelResponse:
+) -> JSONResponse:
     """取消任务."""
     job_service = JobService(db)
 
@@ -114,10 +98,7 @@ async def cancel_job(
         # 执行取消
         cancelled_job = await job_service.cancel_job(job_id)
         await job_dispatcher.revoke(getattr(cancelled_job, "celery_task_id", None))
-        return JobCancelResponse(
-            id=cancelled_job.id,
-            status=cancelled_job.status.value,
-        )
+        return success_response(job_to_data(cancelled_job), request=request, status_code=202)
     except NotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -137,7 +118,6 @@ async def cancel_job(
 
 @router.post(
     "/realtime/tickets",
-    response_model=RealtimeTicketResponse,
     summary="获取WebSocket票据",
     description="获取一次性票据用于建立WebSocket连接。票据有效期30秒。",
     responses={
@@ -147,8 +127,9 @@ async def cancel_job(
 )
 async def create_realtime_ticket(
     request: RealtimeTicketRequest,
+    http_request: Request,
     current_user: AuthenticatedUser,
-) -> RealtimeTicketResponse:
+) -> JSONResponse:
     """获取WebSocket票据."""
     from app.domains.jobs.services.realtime_ticket_service import realtime_ticket_service
 
@@ -158,7 +139,7 @@ async def create_realtime_ticket(
         channel=request.channel,
     )
 
-    return RealtimeTicketResponse(
-        ticket=ticket,
-        expires_at=expires_at,
+    return success_response(
+        {"ticket": ticket, "expiresAt": expires_at},
+        request=http_request,
     )

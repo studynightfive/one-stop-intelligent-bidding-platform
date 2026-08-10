@@ -3,10 +3,21 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ModelProviderRequest(BaseModel):
+def _to_camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in tail)
+
+
+class ContractModel(BaseModel):
+    """Accept both Python names and the locked camelCase JSON names."""
+
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True)
+
+
+class ModelProviderRequest(ContractModel):
     """模型服务商请求."""
 
     provider: str = Field(..., description="提供商: qwen/deepseek/zhipu/custom_openai_compatible")
@@ -16,7 +27,16 @@ class ModelProviderRequest(BaseModel):
     enabled: bool = Field(True, description="是否启用")
 
 
-class ModelProviderResponse(BaseModel):
+class UpdateModelProviderRequest(ContractModel):
+    """Partial provider update payload."""
+
+    display_name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = Field(None, min_length=1)
+    enabled: bool | None = None
+
+
+class ModelProviderResponse(ContractModel):
     """模型服务商响应."""
 
     id: UUID = Field(..., description="ID")
@@ -31,7 +51,7 @@ class ModelProviderResponse(BaseModel):
     version: int = Field(..., description="版本号")
 
 
-class ModelRouteRequest(BaseModel):
+class ModelRouteRequest(ContractModel):
     """模型路由请求."""
 
     scene: str = Field(..., description="场景")
@@ -44,7 +64,7 @@ class ModelRouteRequest(BaseModel):
     circuit_breaker_failures: int = Field(3, description="熔断失败次数")
 
 
-class ModelRouteResponse(BaseModel):
+class ModelRouteResponse(ContractModel):
     """模型路由响应."""
 
     scene: str = Field(..., description="场景")
@@ -57,7 +77,7 @@ class ModelRouteResponse(BaseModel):
     circuit_breaker_failures: int = Field(..., description="熔断失败次数")
 
 
-class GenerationSettingsRequest(BaseModel):
+class GenerationSettingsRequest(ContractModel):
     """生成参数请求."""
 
     temperature: float = Field(0.3, ge=0, le=2, description="温度参数")
@@ -68,7 +88,7 @@ class GenerationSettingsRequest(BaseModel):
     circuit_breaker_enabled: bool = Field(True, description="启用熔断")
 
 
-class GenerationSettingsResponse(BaseModel):
+class GenerationSettingsResponse(ContractModel):
     """生成参数响应."""
 
     temperature: float = Field(..., description="温度参数")
@@ -79,7 +99,7 @@ class GenerationSettingsResponse(BaseModel):
     circuit_breaker_enabled: bool = Field(..., description="启用熔断")
 
 
-class DeploymentSettingsRequest(BaseModel):
+class DeploymentSettingsRequest(ContractModel):
     """部署设置请求."""
 
     mode: str = Field(..., description="模式: saas/private")
@@ -92,7 +112,7 @@ class DeploymentSettingsRequest(BaseModel):
     version_control_enabled: bool = Field(True, description="启用版本控制")
 
 
-class DeploymentSettingsResponse(BaseModel):
+class DeploymentSettingsResponse(ContractModel):
     """部署设置响应."""
 
     mode: str = Field(..., description="模式")
@@ -106,7 +126,7 @@ class DeploymentSettingsResponse(BaseModel):
     version: int = Field(..., description="版本号")
 
 
-class DocumentTemplateRequest(BaseModel):
+class DocumentTemplateRequest(ContractModel):
     """文档模板设置请求."""
 
     format: str = Field("standard", description="格式: standard/custom")
@@ -120,7 +140,7 @@ class DocumentTemplateRequest(BaseModel):
     watermark_text: str | None = Field(None, description="水印文本")
 
 
-class DocumentTemplateResponse(BaseModel):
+class DocumentTemplateResponse(ContractModel):
     """文档模板设置响应."""
 
     format: str = Field(..., description="格式")
@@ -135,7 +155,7 @@ class DocumentTemplateResponse(BaseModel):
     version: int = Field(..., description="版本号")
 
 
-class NotificationSettingsRequest(BaseModel):
+class NotificationSettingsRequest(ContractModel):
     """通知设置请求."""
 
     in_app_enabled: bool = Field(True, description="启用站内通知")
@@ -144,7 +164,7 @@ class NotificationSettingsRequest(BaseModel):
     events: dict[str, bool] = Field(..., description="事件开关")
 
 
-class NotificationSettingsResponse(BaseModel):
+class NotificationSettingsResponse(ContractModel):
     """通知设置响应."""
 
     in_app_enabled: bool = Field(..., description="启用站内通知")
@@ -154,7 +174,7 @@ class NotificationSettingsResponse(BaseModel):
     version: int = Field(..., description="版本号")
 
 
-class AgentStatusResponse(BaseModel):
+class AgentStatusResponse(ContractModel):
     """Agent状态响应."""
 
     name: str = Field(..., description="Agent名称")

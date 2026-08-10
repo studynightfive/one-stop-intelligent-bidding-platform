@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func as sql_func
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.audit.models.audit_event import ActorType, AuditEvent
@@ -180,11 +180,14 @@ class AuditService:
         aggregate_type: str | None = None,
         aggregate_id: UUID | None = None,
         actor_id: UUID | None = None,
+        actor_name: str | None = None,
         action: str | None = None,
+        resource: str | None = None,
         target_type: str | None = None,
         target_id: UUID | None = None,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
+        sort_order: str = "desc",
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[AuditEvent], int]:
@@ -195,11 +198,14 @@ class AuditService:
             aggregate_type: 聚合类型筛选
             aggregate_id: 聚合ID筛选
             actor_id: 操作者ID筛选
+            actor_name: 操作者名称模糊筛选
             action: 操作类型筛选
+            resource: 聚合或目标资源类型筛选
             target_type: 目标类型筛选
             target_id: 目标ID筛选
             start_date: 开始时间
             end_date: 结束时间
+            sort_order: 创建时间排序方向
             limit: 返回数量限制
             offset: 偏移量
 
@@ -215,8 +221,12 @@ class AuditService:
             conditions.append(AuditEvent.aggregate_id == aggregate_id)
         if actor_id:
             conditions.append(AuditEvent.actor_id == actor_id)
+        if actor_name:
+            conditions.append(AuditEvent.actor_name.ilike(f"%{actor_name}%"))
         if action:
             conditions.append(AuditEvent.action == action)
+        if resource:
+            conditions.append(or_(AuditEvent.aggregate_type == resource, AuditEvent.target_type == resource))
         if target_type:
             conditions.append(AuditEvent.target_type == target_type)
         if target_id:
@@ -232,7 +242,8 @@ class AuditService:
         total = count_result.scalar_one()
 
         # 查询列表
-        stmt = select(AuditEvent).where(*conditions).order_by(AuditEvent.created_at.desc()).limit(limit).offset(offset)
+        created_at_order = AuditEvent.created_at.asc() if sort_order == "asc" else AuditEvent.created_at.desc()
+        stmt = select(AuditEvent).where(*conditions).order_by(created_at_order).limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         events = list(result.scalars().all())
 

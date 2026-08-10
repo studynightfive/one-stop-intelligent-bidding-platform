@@ -4,6 +4,7 @@
 """
 
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import Any
 from uuid import UUID
 
@@ -19,6 +20,7 @@ from app.core.errors import (
 )
 from app.core.security import (
     create_access_token,
+    create_action_token,
     create_refresh_token,
     get_password_hash,
     verify_password,
@@ -63,6 +65,7 @@ class AuthService:
         # 更新最后登录时间
         user.last_login_at = datetime.now(UTC)
         await self.db.commit()
+        await self.db.refresh(user)
 
         return user
 
@@ -232,3 +235,59 @@ class AuthService:
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_active_user_by_email(self, email: str) -> User | None:
+        """Resolve an active account for the public forgot-password flow."""
+        stmt = (
+            select(User)
+            .where(
+                User.email == email,
+                User.status == UserStatus.ACTIVE,
+                User.deleted_at.is_(None),
+            )
+            .order_by(User.updated_at.desc())
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    def create_password_reset_token(user: User) -> str:
+        """Create a purpose-bound token invalidated by any later user update."""
+        return create_action_token(
+            str(user.id),
+            token_type="password_reset",
+            expires_delta=timedelta(minutes=30),
+            additional_claims={
+                "tenant_id": str(user.tenant_id),
+                "credential_version": sha256((user.password_hash or "").encode()).hexdigest(),
+            },
+        )
+
+    async def reset_password(self, reset_token: str, new_password: str) -> User:
+        """Verify a password-reset token and replace the account credential."""
+        try:
+            payload = verify_token(reset_token, token_type="password_reset")
+            user_id = UUID(str(payload["sub"]))
+            tenant_id = UUID(str(payload["tenant_id"]))
+        except Exception as exc:
+            raise AuthenticationError(message="密码重置链接无效或已过期") from exc
+
+        result = await self.db.execute(
+            select(User).where(
+                User.id == user_id,
+                User.tenant_id == tenant_id,
+                User.status == UserStatus.ACTIVE,
+                User.deleted_at.is_(None),
+            )
+        )
+        user = result.scalar_one_or_none()
+        current_version = sha256((user.password_hash or "").encode()).hexdigest() if user is not None else None
+        if user is None or payload.get("credential_version") != current_version:
+            raise AuthenticationError(message="密码重置链接无效或已使用")
+
+        user.password_hash = get_password_hash(new_password)
+        user.updated_at = datetime.now(UTC)
+        await self.db.commit()
+        await self.db.refresh(user)
+        return user
