@@ -16,7 +16,7 @@ from app.domains.audit.api import export_audit_events, list_audit_events
 from app.domains.auth.api import auth as auth_api
 from app.domains.auth.schemas.auth import LoginRequest
 from app.domains.files.api import files as files_api
-from app.domains.files.schemas.file import CompleteUploadRequest
+from app.domains.files.schemas.file import CompleteUploadRequest, CreateUploadSessionRequest
 from app.domains.jobs.api import jobs as jobs_api
 from app.domains.jobs.models.job import JobStatus, JobType
 from app.domains.notifications import api as notifications_api
@@ -28,6 +28,17 @@ from app.domains.settings.services.settings_service import SettingsService
 
 def _current_user() -> dict[str, str]:
     return {"id": str(uuid4()), "tenant_id": str(uuid4()), "role": "admin"}
+
+
+def _request(method: str, path: str, request_id: str = "file-request") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [(b"x-request-id", request_id.encode())],
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -99,7 +110,7 @@ def _file() -> SimpleNamespace:
         file_name="proposal.pdf",
         mime_type="application/pdf",
         size_bytes=10,
-        sha256="hash",
+        sha256="a" * 64,
         scan_status=SimpleNamespace(value="clean"),
         created_at=datetime.now(UTC),
     )
@@ -107,39 +118,90 @@ def _file() -> SimpleNamespace:
 
 @pytest.mark.asyncio
 async def test_file_api_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _session()
+    file_record = _file()
     service = SimpleNamespace(
-        create_upload_session=AsyncMock(return_value=_session()),
-        get_upload_session=AsyncMock(return_value=_session()),
-        record_uploaded_part=AsyncMock(),
-        complete_upload=AsyncMock(return_value=_file()),
+        create_upload_session=AsyncMock(return_value=session),
+        get_upload_session=AsyncMock(return_value=session),
+        upload_part=AsyncMock(return_value=(session, "etag")),
+        complete_upload=AsyncMock(return_value=file_record),
         cancel_upload_session=AsyncMock(),
-        get_preview_url=AsyncMock(return_value="https://preview"),
-        get_download_url=AsyncMock(return_value="https://download"),
+        open_file=AsyncMock(return_value=(file_record, object())),
     )
     monkeypatch.setattr(files_api, "FileService", lambda _db: service)
     current_user = _current_user()
-    request = {
-        "file_name": "proposal.pdf",
-        "mime_type": "application/pdf",
-        "size_bytes": 10,
-        "sha256": "hash",
-    }
-
-    created = await files_api.create_upload_session(request, current_user, object())
-    assert created.file_name == "proposal.pdf"
-    assert (await files_api.get_upload_session(created.id, current_user, object())).id
-    uploaded = await files_api.upload_part(created.id, 1, current_user, object(), None)  # type: ignore[arg-type]
-    assert uploaded.part_number == 1
-    completed = await files_api.complete_upload(
-        created.id,
-        CompleteUploadRequest(parts=[{"part_number": 1, "etag": "etag"}]),
-        current_user,
-        object(),
+    body = CreateUploadSessionRequest(
+        fileName="proposal.pdf",
+        mimeType="application/pdf",
+        sizeBytes=10,
+        sha256="a" * 64,
+        purpose="tender",
     )
-    assert completed.file_name == "proposal.pdf"
-    await files_api.cancel_upload(created.id, current_user, object())
-    assert await files_api.preview_file(completed.id, current_user, object()) == {"preview_url": "https://preview"}
-    assert await files_api.download_file(completed.id, current_user, object()) == {"download_url": "https://download"}
+
+    created_response = await files_api.create_upload_session(
+        body,
+        _request("POST", "/api/v1/files/upload-sessions"),
+        current_user,
+        object(),  # type: ignore[arg-type]
+    )
+    created = json.loads(created_response.body)
+    upload_id = UUID(created["data"]["id"])
+    assert created["success"] is True
+    assert created["data"]["fileName"] == "proposal.pdf"
+    assert "file_name" not in created["data"]
+
+    queried_response = await files_api.get_upload_session(
+        upload_id,
+        _request("GET", f"/api/v1/files/upload-sessions/{upload_id}"),
+        current_user,
+        object(),  # type: ignore[arg-type]
+    )
+    assert json.loads(queried_response.body)["data"]["id"] == str(upload_id)
+
+    uploaded_response = await files_api.upload_part(
+        upload_id,
+        1,
+        b"0123456789",
+        _request("PUT", f"/api/v1/files/upload-sessions/{upload_id}/parts/1"),
+        current_user,
+        object(),  # type: ignore[arg-type]
+    )
+    assert json.loads(uploaded_response.body)["data"] == {"partNumber": 1, "etag": "etag"}
+
+    completed_response = await files_api.complete_upload(
+        upload_id,
+        CompleteUploadRequest(parts=[{"partNumber": 1, "etag": "etag"}]),
+        _request("POST", f"/api/v1/files/upload-sessions/{upload_id}/complete"),
+        current_user,
+        object(),  # type: ignore[arg-type]
+        "idempotency-file-upload",
+    )
+    completed = json.loads(completed_response.body)
+    file_id = UUID(completed["data"]["id"])
+    assert completed["data"]["fileName"] == "proposal.pdf"
+
+    cancelled = await files_api.cancel_upload(
+        upload_id,
+        _request("DELETE", f"/api/v1/files/upload-sessions/{upload_id}"),
+        current_user,
+        object(),  # type: ignore[arg-type]
+    )
+    assert cancelled.status_code == 204
+
+    preview = await files_api.preview_file(
+        file_id,
+        _request("GET", f"/api/v1/files/{file_id}/preview"),
+        current_user,
+        object(),  # type: ignore[arg-type]
+    )
+    download = await files_api.download_file(
+        file_id,
+        _request("GET", f"/api/v1/files/{file_id}/download"),
+        current_user,
+        object(),  # type: ignore[arg-type]
+    )
+    assert preview.headers["content-disposition"].startswith("inline")
+    assert download.headers["content-disposition"].startswith("attachment")
 
 
 @pytest.mark.asyncio
@@ -147,22 +209,41 @@ async def test_file_api_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     service = SimpleNamespace(
         get_upload_session=AsyncMock(return_value=None),
         complete_upload=AsyncMock(side_effect=FileRejectedError()),
-        get_preview_url=AsyncMock(side_effect=NotFoundError()),
-        get_download_url=AsyncMock(side_effect=NotFoundError()),
+        open_file=AsyncMock(side_effect=NotFoundError()),
     )
     monkeypatch.setattr(files_api, "FileService", lambda _db: service)
     current_user = _current_user()
     identifier = uuid4()
-    with pytest.raises(HTTPException) as missing:
-        await files_api.get_upload_session(identifier, current_user, object())
-    assert missing.value.status_code == 404
-    with pytest.raises(HTTPException) as rejected:
-        await files_api.complete_upload(identifier, CompleteUploadRequest(parts=[]), current_user, object())
-    assert rejected.value.status_code == 400
-    with pytest.raises(HTTPException):
-        await files_api.preview_file(identifier, current_user, object())
-    with pytest.raises(HTTPException):
-        await files_api.download_file(identifier, current_user, object())
+    with pytest.raises(NotFoundError):
+        await files_api.get_upload_session(
+            identifier,
+            _request("GET", f"/api/v1/files/upload-sessions/{identifier}"),
+            current_user,
+            object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(FileRejectedError):
+        await files_api.complete_upload(
+            identifier,
+            CompleteUploadRequest(parts=[{"partNumber": 1, "etag": "etag"}]),
+            _request("POST", f"/api/v1/files/upload-sessions/{identifier}/complete"),
+            current_user,
+            object(),  # type: ignore[arg-type]
+            "idempotency-file-upload",
+        )
+    with pytest.raises(NotFoundError):
+        await files_api.preview_file(
+            identifier,
+            _request("GET", f"/api/v1/files/{identifier}/preview"),
+            current_user,
+            object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(NotFoundError):
+        await files_api.download_file(
+            identifier,
+            _request("GET", f"/api/v1/files/{identifier}/download"),
+            current_user,
+            object(),  # type: ignore[arg-type]
+        )
 
 
 def _job() -> SimpleNamespace:
