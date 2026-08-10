@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, DatePicker, Form, Input, Modal, Pagination, Select, Space, Switch, Table, Tag, message } from 'antd'
 import { AlertCircle, AlertTriangle, Calendar, CheckCircle, Download, FileCheck2, FileText, History, Plus, Search, Trash2 } from 'lucide-react'
 import dayjs from 'dayjs'
@@ -7,17 +7,24 @@ import { downloadDemoFile } from '../utils/demoActions'
 import { AppUpload, ConfirmAction, EmptyState, FilePreview, FilterBar, JobProgress, PermissionGate } from '../components/common'
 import { appendLibraryVersion, deriveQualificationStatus, nextDocumentVersion, paginate, qualificationRemainingDays } from '../features/libraries/utils'
 import type { QualificationRecord } from '../features/libraries/types'
+import { platformApi, saveBlob, type Qualification } from '../api/platformApi'
+import { shouldUseMocks } from '../api/runtime'
+import { createHttpBidApi } from '../features/bids/adapters/httpBidApi'
 
 const categories = ['全部', '营业执照', 'ISO证书', '行业资质', '安全资质', '财务文件']
 const statusMap = {
   valid: { label: '有效', color: '#16A34A', bg: '#F0FDF4', icon: CheckCircle },
   expiring: { label: '即将过期', color: '#D97706', bg: '#FFFBEB', icon: AlertTriangle },
   expired: { label: '已失效', color: '#DC2626', bg: '#FEF2F2', icon: AlertCircle },
+  revoked: { label: '已撤销', color: '#DC2626', bg: '#FEF2F2', icon: AlertCircle },
   permanent: { label: '长期有效', color: '#2563EB', bg: '#EFF6FF', icon: CheckCircle },
 } as const
 
 export default function QualificationLibrary() {
   const { qualifications, setQualifications, permissions } = useDemo()
+  const mockMode = shouldUseMocks()
+  const [loading, setLoading] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [category, setCategory] = useState('全部')
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -29,6 +36,48 @@ export default function QualificationLibrary() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(8)
   const [form] = Form.useForm()
+
+  const normalizeQualification = useCallback((record: Qualification): QualificationRecord => ({
+    id: record.id,
+    name: record.name,
+    category: record.category,
+    certNumber: record.certNumber,
+    issuer: record.issuer,
+    expiryDate: record.expiryDate || '-',
+    status: record.expiryDate ? record.status : 'permanent',
+    fileName: record.file.fileName,
+    fileId: record.file.id,
+    source: '企业资质库',
+    version: record.documentVersion,
+    apiVersion: record.version,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    versions: [{
+      version: record.documentVersion,
+      fileName: record.file.fileName,
+      changeNote: '当前生效版本',
+      createdAt: new Date(record.updatedAt).toLocaleString('zh-CN', { hour12: false }),
+      createdBy: '系统',
+    }],
+  }), [])
+
+  const refreshQualifications = useCallback(async () => {
+    if (mockMode) return
+    setLoading(true)
+    try {
+      const result = await platformApi.listQualifications({ page: 1, pageSize: 100, sortBy: 'updatedAt', sortOrder: 'desc' })
+      setQualifications(result.data.map(normalizeQualification))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '资质列表加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [mockMode, normalizeQualification, setQualifications])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void refreshQualifications(), 0)
+    return () => window.clearTimeout(timeout)
+  }, [refreshQualifications])
 
   const records = useMemo(() => (qualifications as QualificationRecord[]).map(record => ({
     ...record,
@@ -57,6 +106,7 @@ export default function QualificationLibrary() {
 
   const openForm = (record?: QualificationRecord, forceNewVersion = false) => {
     setEditing(record || null)
+    setSelectedFile(null)
     form.setFieldsValue(record ? {
       ...record,
       expiryDate: record.expiryDate === '-' ? null : dayjs(record.expiryDate),
@@ -78,6 +128,59 @@ export default function QualificationLibrary() {
     const shouldVersion = Boolean(editing && values.createNewVersion)
     const version = shouldVersion ? nextDocumentVersion(editing?.version) : editing?.version || 'v1.0'
     const expiryDate = values.expiryDate ? values.expiryDate.format('YYYY-MM-DD') : '-'
+    if (!mockMode) {
+      setLoading(true)
+      try {
+        let result: Qualification
+        if (editing) {
+          result = await platformApi.updateQualification(editing.id, editing.apiVersion || 1, {
+            name: values.name,
+            category: values.category,
+            certNumber: values.certNumber,
+            issuer: values.issuer,
+            expiryDate: expiryDate === '-' ? undefined : expiryDate,
+            documentVersion: shouldVersion ? editing.version : version,
+            reminderDays: [30, 60, 90],
+            tags: [],
+          })
+          if (shouldVersion) {
+            if (!selectedFile) throw new Error('生成新版本时必须选择新的资质文件')
+            const fileRef = await createHttpBidApi().uploadFile(selectedFile, 'qualification')
+            result = await platformApi.addQualificationVersion(editing.id, {
+              fileId: fileRef.id,
+              documentVersion: version,
+              changeNote: values.changeNote || '更新资质版本',
+            })
+          }
+        } else {
+          if (!selectedFile) throw new Error('新增资质时必须选择并上传资质文件')
+          const fileRef = await createHttpBidApi().uploadFile(selectedFile, 'qualification')
+          result = await platformApi.createQualification({
+            name: values.name,
+            category: values.category,
+            certNumber: values.certNumber,
+            issuer: values.issuer,
+            expiryDate: expiryDate === '-' ? undefined : expiryDate,
+            fileId: fileRef.id,
+            documentVersion: version,
+            reminderDays: [30, 60, 90],
+            tags: [],
+          })
+        }
+        const normalized = normalizeQualification(result)
+        setQualifications(previous => editing ? previous.map(item => item.id === editing.id ? normalized : item) : [normalized, ...previous])
+        setModalOpen(false)
+        setEditing(null)
+        setSelectedFile(null)
+        form.resetFields()
+        message.success(shouldVersion ? `已生成 ${version} 新版本` : editing ? '资质信息已更新' : '资质已添加')
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '资质保存失败')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
     const row: QualificationRecord = {
       ...editing,
       ...values,
@@ -103,12 +206,37 @@ export default function QualificationLibrary() {
     message.success(shouldVersion ? `已生成 ${version} 新版本` : editing ? '资质信息已更新' : '资质已添加')
   }
 
-  const deleteQualification = (record: QualificationRecord) => {
+  const deleteQualification = async (record: QualificationRecord) => {
+    if (!mockMode) {
+      try {
+        await platformApi.deleteQualification(record.id, '管理员从资质库页面删除')
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '资质删除失败')
+        throw error
+      }
+    }
     setQualifications(previous => previous.filter(item => item.id !== record.id))
     message.success(`已删除“${record.name}”并保留操作记录`)
   }
 
-  const importFiles = (files: File[]) => {
+  const importFiles = async (files: File[]) => {
+    if (!mockMode) {
+      const file = files[0]
+      if (!file) return
+      setImportJob('running')
+      try {
+        const fileRef = await createHttpBidApi().uploadFile(file, 'qualification')
+        const job = await platformApi.importQualifications(fileRef.id)
+        if (job.status === 'failed') throw new Error(job.error?.message || '资质导入失败')
+        setImportJob(job.status === 'succeeded' ? 'succeeded' : 'running')
+        await refreshQualifications()
+        message.success(job.status === 'succeeded' ? '资质已导入并完成校验' : '资质导入任务已创建，可稍后刷新查看结果')
+      } catch (error) {
+        setImportJob('idle')
+        message.error(error instanceof Error ? error.message : '资质导入失败')
+      }
+      return
+    }
     setImportJob('running')
     const created = files.map((file, index): QualificationRecord => ({
       id: `QUAL-IMPORT-${Date.now()}-${index}`,
@@ -139,7 +267,13 @@ export default function QualificationLibrary() {
         </div>
         <PermissionGate permissions={permissions} require="library:write">
           <div className="flex flex-wrap items-center gap-2">
-            <Button icon={<Download size={14} />} onClick={() => downloadDemoFile('资质批量导入模板.csv', '资质名称,分类,证书编号,发证机构,有效期,文件名\nISO 9001,ISO证书,DEMO-001,认证中心,2027-12-31,iso.pdf', 'text/csv;charset=utf-8')}>下载导入模板</Button>
+            <Button icon={<Download size={14} />} onClick={() => {
+              if (mockMode) {
+                downloadDemoFile('资质批量导入模板.csv', '资质名称,分类,证书编号,发证机构,有效期,文件名\nISO 9001,ISO证书,DEMO-001,认证中心,2027-12-31,iso.pdf', 'text/csv;charset=utf-8')
+              } else {
+                void platformApi.downloadQualificationTemplate().then(blob => saveBlob(blob, '资质批量导入模板.xlsx')).catch(error => message.error(error instanceof Error ? error.message : '模板下载失败'))
+              }
+            }}>下载导入模板</Button>
             <AppUpload compact multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv" label="批量导入" onFiles={importFiles} />
             <Button type="primary" icon={<Plus size={14} />} onClick={() => openForm()}>添加资质</Button>
           </div>
@@ -196,7 +330,10 @@ export default function QualificationLibrary() {
                   <td className="px-4 py-3"><div className="flex items-center gap-1 text-xs text-[#2563EB]"><FileText size={13} />{record.fileName}</div><button type="button" className="mt-1 text-xs text-[#64748B] hover:text-[#2563EB]" onClick={() => setVersionRecord(record)}><History size={11} className="mr-1 inline" />{record.version} · 查看历史</button></td>
                   <td className="px-4 py-3 text-right"><div className="flex items-center justify-end gap-1">
                     <FilePreview file={{ name: record.fileName, version: record.version, source: record.source, updatedAt: record.updatedAt, content: `${record.name}\n证书编号：${record.certNumber}\n发证机构：${record.issuer}\n有效期：${record.expiryDate}` }} />
-                    <Button type="link" size="small" onClick={() => downloadDemoFile(record.fileName, `${record.name}\n证书编号：${record.certNumber}\n有效期：${record.expiryDate}`)}>下载</Button>
+                    <Button type="link" size="small" onClick={() => {
+                      if (mockMode) downloadDemoFile(record.fileName, `${record.name}\n证书编号：${record.certNumber}\n有效期：${record.expiryDate}`)
+                      else void platformApi.downloadQualification(record.id).then(blob => saveBlob(blob, record.fileName)).catch(error => message.error(error instanceof Error ? error.message : '资质文件下载失败'))
+                    }}>下载</Button>
                     <PermissionGate permissions={permissions} require="library:write">
                       <Button type="link" size="small" onClick={() => openForm(record, record.status === 'expired' || record.status === 'expiring')}>{record.status === 'expired' || record.status === 'expiring' ? '更新版本' : '编辑'}</Button>
                       <ConfirmAction title={`删除“${record.name}”？`} description="删除后不会再用于新任务，现有引用及操作日志仍然保留。" danger onConfirm={() => deleteQualification(record)} buttonProps={{ type: 'text', size: 'small', icon: <Trash2 size={13} />, 'aria-label': `删除 ${record.name}` }}>删除</ConfirmAction>
@@ -211,7 +348,7 @@ export default function QualificationLibrary() {
         {filtered.length > 0 && <div className="flex justify-end border-t border-[#F1F5F9] p-3"><Pagination current={paged.page} pageSize={pageSize} total={filtered.length} showSizeChanger pageSizeOptions={[8, 16, 24]} showTotal={total => `共 ${total} 条`} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) }} /></div>}
       </div>
 
-      <Modal title={editing ? '编辑/更新资质' : '添加资质'} open={modalOpen} onCancel={() => { setModalOpen(false); setEditing(null); form.resetFields() }} onOk={saveQualification} okText="保存" cancelText="取消" width={680}>
+      <Modal title={editing ? '编辑/更新资质' : '添加资质'} open={modalOpen} confirmLoading={loading} onCancel={() => { setModalOpen(false); setEditing(null); setSelectedFile(null); form.resetFields() }} onOk={saveQualification} okText="保存" cancelText="取消" width={680}>
         <Form form={form} layout="vertical" className="pt-3" requiredMark={false}>
           <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
             <Form.Item name="name" label="资质名称" rules={[{ required: true, message: '请输入资质名称' }]}><Input /></Form.Item>
@@ -223,7 +360,7 @@ export default function QualificationLibrary() {
             <Form.Item label="资质文件" required>
               <Space.Compact className="w-full">
                 <Form.Item name="fileName" noStyle rules={[{ required: true, message: '请输入或选择文件' }]}><Input placeholder="输入文件名或选择本地文件" /></Form.Item>
-                <AppUpload compact accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" maxSizeMb={50} label="选择文件" onFiles={files => { if (files[0]) form.setFieldValue('fileName', files[0].name) }} />
+                <AppUpload compact accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" maxSizeMb={50} label="选择文件" onFiles={files => { if (files[0]) { setSelectedFile(files[0]); form.setFieldValue('fileName', files[0].name) } }} />
               </Space.Compact>
             </Form.Item>
             {editing && <Form.Item name="createNewVersion" label="生成新版本" valuePropName="checked"><Switch /></Form.Item>}
