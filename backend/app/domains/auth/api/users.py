@@ -37,6 +37,7 @@ from app.domains.auth.schemas.auth import (
 from app.domains.auth.services.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["用户管理"])
+metadata_router = APIRouter(tags=["用户管理"])
 
 
 def _user_to_response(user: Any) -> UserResponse:
@@ -313,7 +314,7 @@ async def get_user_activity(
 # === 角色和权限 ===
 
 
-@router.get(
+@metadata_router.get(
     "/roles",
     response_model=list[RoleDefinition],
     summary="角色定义",
@@ -388,7 +389,7 @@ async def list_roles(
     return [RoleDefinition(**role, user_count=0) for role in roles]
 
 
-@router.get(
+@metadata_router.get(
     "/permissions/matrix",
     response_model=PermissionMatrix,
     summary="权限矩阵",

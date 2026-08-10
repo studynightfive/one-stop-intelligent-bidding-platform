@@ -65,6 +65,7 @@ def test_platform_module_imports(module_name: str) -> None:
     (
         ("app.domains.audit.api", "router"),
         ("app.domains.auth.api", "auth_router"),
+        ("app.domains.auth.api", "metadata_router"),
         ("app.domains.auth.api", "users_router"),
         ("app.domains.files.api", "files_router"),
         ("app.domains.health", "router"),
@@ -79,3 +80,14 @@ def test_platform_router_is_exported(module_name: str, attribute: str) -> None:
     router = getattr(module, attribute)
     assert isinstance(router, APIRouter)
     assert router.routes
+
+
+def test_auth_metadata_routes_are_not_nested_under_users() -> None:
+    from app.domains.auth.api import metadata_router, users_router
+
+    metadata_paths = {route.path for route in metadata_router.routes}
+    user_paths = {route.path for route in users_router.routes}
+
+    assert metadata_paths == {"/roles", "/permissions/matrix"}
+    assert "/users/roles" not in user_paths
+    assert "/users/permissions/matrix" not in user_paths
