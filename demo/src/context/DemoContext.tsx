@@ -8,11 +8,14 @@ import {
   notifications as initialBidNotifications,
 } from '../mock/data'
 import { evaluationTasks as initialEvaluationTasks, evalNotifications as initialEvaluationNotifications } from '../mock/evaluationData'
+import { loginSession, logoutSession, type LoginValues } from '../api/authApi'
+import { readAccessToken } from '../api/authStorage'
+import { shouldUseMocks } from '../api/runtime'
 
 type DemoContextValue = {
   loggedIn: boolean
-  login: () => void
-  logout: () => void
+  login: (values?: LoginValues) => Promise<void>
+  logout: () => Promise<void>
   bidTasks: any[]
   addBidTask: (task: any, taskMaterials?: any[]) => void
   updateBidTask: (id: string, patch: Record<string, any>) => void
@@ -67,7 +70,11 @@ function readStoredState() {
 
 export function DemoProvider({ children }: { children: React.ReactNode }) {
   const stored = typeof window === 'undefined' ? null : readStoredState()
-  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('bid-demo-logged-in') === 'true')
+  const mockMode = shouldUseMocks()
+  const [loggedIn, setLoggedIn] = useState(() => (
+    mockMode ? sessionStorage.getItem('bid-demo-logged-in') === 'true' : Boolean(readAccessToken())
+  ))
+  const [permissions, setPermissions] = useState<string[]>(DEMO_PERMISSIONS)
   const [bidTasks, setBidTasks] = useState<any[]>(stored?.bidTasks || clone(initialBidTasks))
   const [taskMaterials, setTaskMaterials] = useState<Record<string, any[]>>(stored?.taskMaterials || buildInitialMaterials())
   const [evaluationTasks, setEvaluationTasks] = useState<any[]>(stored?.evaluationTasks || clone(initialEvaluationTasks))
@@ -88,15 +95,27 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     }))
   }, [bidTasks, taskMaterials, evaluationTasks, qualifications, fragments, users, appNotifications])
 
-  const login = () => {
+  const login = useCallback(async (values?: LoginValues) => {
+    if (!mockMode) {
+      if (!values) throw new Error('璇疯緭鍏ョ櫥褰曞嚟璇?')
+      const session = await loginSession(values)
+      setPermissions(session.permissions)
+    }
     sessionStorage.setItem('bid-demo-logged-in', 'true')
     setLoggedIn(true)
-  }
+  }, [mockMode])
 
-  const logout = () => {
+  const logout = useCallback(async () => {
+    if (!mockMode) {
+      try {
+        await logoutSession()
+      } catch {
+        // The local session must still be cleared when the API is unavailable.
+      }
+    }
     sessionStorage.removeItem('bid-demo-logged-in')
     setLoggedIn(false)
-  }
+  }, [mockMode])
 
   const addBidTask = (task: any, materials = clone(initialMaterials)) => {
     setBidTasks(prev => [task, ...prev])
@@ -182,13 +201,15 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     appNotifications,
     markNotificationRead,
     markAllNotificationsRead,
-    permissions: DEMO_PERMISSIONS,
+    permissions,
     resetDemoData,
-  }), [loggedIn, bidTasks, evaluationTasks, qualifications, fragments, users, appNotifications, getTaskMaterials])
+  }), [loggedIn, login, logout, bidTasks, evaluationTasks, qualifications, fragments, users, appNotifications, getTaskMaterials, permissions])
 
   return <DemoContext.Provider value={value}>{children}</DemoContext.Provider>
 }
 
+// Provider and hook intentionally share this module to preserve the established import boundary.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useDemo() {
   const context = useContext(DemoContext)
   if (!context) throw new Error('useDemo must be used inside DemoProvider')

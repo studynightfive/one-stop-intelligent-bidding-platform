@@ -43,7 +43,14 @@ function LoginRoute() {
   const navigate = useNavigate()
   const from = (location.state as { from?: string } | null)?.from || '/dashboard'
   if (loggedIn) return <Navigate to={from} replace />
-  return <Login onLogin={() => { login(); navigate(from, { replace: true }) }} />
+  return (
+    <Login
+      onLogin={async values => {
+        await login(values)
+        navigate(from, { replace: true })
+      }}
+    />
+  )
 }
 
 function AppRoutes() {

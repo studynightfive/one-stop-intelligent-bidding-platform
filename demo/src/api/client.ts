@@ -1,4 +1,5 @@
 import { ApiError, createRequestId, mapHttpError, mapTransportError } from './interceptors'
+import { browserAuthAdapter } from './authStorage'
 
 export interface AuthAdapter {
   getAccessToken: () => string | null
@@ -24,6 +25,7 @@ export interface ApiRequestOptions {
   ifMatch?: string | number
   idempotencyKey?: string
   responseType?: 'json' | 'blob' | 'text'
+  preserveEnvelope?: boolean
 }
 
 type ApiEnvelope<T> = {
@@ -31,6 +33,18 @@ type ApiEnvelope<T> = {
   data?: T
   error?: { code?: string; message?: string; details?: unknown }
   requestId?: string
+  meta?: {
+    page: number
+    pageSize: number
+    total: number
+    totalPages: number
+  }
+}
+
+export type ApiPage<T> = {
+  data: T
+  meta: NonNullable<ApiEnvelope<unknown>['meta']>
+  requestId: string
 }
 
 function joinUrl(baseUrl: string, path: string) {
@@ -88,6 +102,10 @@ export class ApiClient {
     return this.request<T>(path, { ...options, method: 'GET' })
   }
 
+  getPage<T>(path: string, options: Omit<ApiRequestOptions, 'method' | 'body' | 'preserveEnvelope'> = {}) {
+    return this.request<ApiPage<T>>(path, { ...options, method: 'GET', preserveEnvelope: true })
+  }
+
   post<T>(path: string, body?: unknown, options: Omit<ApiRequestOptions, 'method' | 'body'> = {}) {
     return this.request<T>(path, { ...options, body, method: 'POST' })
   }
@@ -141,7 +159,17 @@ export class ApiClient {
       if (!response.ok) {
         let payload: ApiEnvelope<never> | undefined
         try {
-          payload = await response.json() as ApiEnvelope<never>
+          const raw = await response.json() as ApiEnvelope<never> & {
+            detail?: ApiEnvelope<never> | { code?: string; message?: string; details?: unknown }
+          }
+          if (raw.detail && typeof raw.detail === 'object' && 'success' in raw.detail) {
+            payload = raw.detail
+          } else if (raw.detail && typeof raw.detail === 'object') {
+            const detail = raw.detail as { code?: string; message?: string; details?: unknown }
+            payload = { success: false, error: detail }
+          } else {
+            payload = raw
+          }
         } catch {
           payload = undefined
         }
@@ -169,6 +197,14 @@ export class ApiClient {
             details: envelope.error?.details,
           })
         }
+        if (options.preserveEnvelope) {
+          if (!envelope.meta) throw new Error('API pagination metadata is missing')
+          return {
+            data: envelope.data,
+            meta: envelope.meta,
+            requestId: envelope.requestId || responseRequestId,
+          } as T
+        }
         return envelope.data as T
       }
       return payload as T
@@ -188,4 +224,4 @@ export class ApiClient {
   }
 }
 
-export const apiClient = new ApiClient()
+export const apiClient = new ApiClient({ auth: browserAuthAdapter })
