@@ -19,6 +19,7 @@ from app.domains.jobs.schemas.job import (
     RealtimeTicketRequest,
     RealtimeTicketResponse,
 )
+from app.domains.jobs.services.job_dispatcher import job_dispatcher
 from app.domains.jobs.services.job_service import JobService
 
 router = APIRouter(tags=["任务"])
@@ -64,6 +65,10 @@ async def get_job(
             tenant_id=UUID(current_user["tenant_id"]),
             is_admin=current_user.get("role") == "admin",
         )
+        if getattr(job, "celery_task_id", None):
+            refreshed = await job_dispatcher.refresh(job, service=job_service)
+            if refreshed is not None:
+                job = refreshed
         return _job_to_response(job)
     except NotFoundError as e:
         raise HTTPException(
@@ -108,6 +113,7 @@ async def cancel_job(
 
         # 执行取消
         cancelled_job = await job_service.cancel_job(job_id)
+        await job_dispatcher.revoke(getattr(cancelled_job, "celery_task_id", None))
         return JobCancelResponse(
             id=cancelled_job.id,
             status=cancelled_job.status.value,
