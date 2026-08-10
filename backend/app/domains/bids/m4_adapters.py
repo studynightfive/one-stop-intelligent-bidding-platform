@@ -103,6 +103,8 @@ class M5JobDispatcherAdapter:
             progress_percent=int(getattr(job, "progress_percent", 0) or 0),
             created_at=getattr(job, "created_at", None) or datetime.now(UTC),
             current_step=getattr(job, "current_step", None),
+            result=getattr(job, "result", None),
+            error=getattr(job, "error", None),
         )
 
 
