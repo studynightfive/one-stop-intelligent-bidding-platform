@@ -144,7 +144,7 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (values?: LoginValues) => {
     if (!mockMode) {
-      if (!values) throw new Error('璇疯緭鍏ョ櫥褰曞嚟璇?')
+      if (!values) throw new Error('请输入登录凭证')
       const session = await loginSession(values)
       setPermissions(session.permissions)
       setCurrentUser(session.user)
