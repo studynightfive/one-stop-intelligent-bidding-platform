@@ -9012,6 +9012,7 @@ paths:
           $ref: '#/components/schemas/Id'
       security:
       - InternalBearer: []
+      - PortalBearer: []
       responses:
         '200':
           description: 操作成功。
@@ -9074,6 +9075,7 @@ paths:
           $ref: '#/components/schemas/Id'
       security:
       - InternalBearer: []
+      - PortalBearer: []
       responses:
         '204':
           description: 操作成功，无响应体。
@@ -9125,6 +9127,7 @@ paths:
           minimum: 1
       security:
       - InternalBearer: []
+      - PortalBearer: []
       responses:
         '200':
           description: 操作成功。
@@ -9196,6 +9199,7 @@ paths:
       - $ref: '#/components/parameters/IdempotencyKey'
       security:
       - InternalBearer: []
+      - PortalBearer: []
       responses:
         '200':
           description: 操作成功。
