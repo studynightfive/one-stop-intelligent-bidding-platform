@@ -7,12 +7,22 @@ from typing import Annotated, Any
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Body, Header, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
-from app.core.dependencies import AuthenticatedUser, DBSession
+from app.core.dependencies import (
+    AuthenticatedUser,
+    DBSession,
+    bearer_scheme,
+    get_current_active_user,
+    get_current_user,
+)
 from app.core.errors import NotFoundError
+from app.domains.evaluations.container import M6Container
+from app.domains.evaluations.errors import DomainError
+from app.domains.evaluations.router import get_container
 from app.domains.files.schemas.file import (
     CompleteUploadRequest,
     CreateUploadSessionRequest,
@@ -24,6 +34,61 @@ from app.domains.files.schemas.file import (
 from app.domains.files.services.file_service import FileService
 
 router = APIRouter(prefix="/files", tags=["文件、异步任务与实时事件"])
+
+
+async def get_upload_actor(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: DBSession,
+    container: Annotated[M6Container, Depends(get_container)],
+) -> dict[str, Any]:
+    """Authenticate resumable uploads for either an internal user or a supplier portal.
+
+    Portal access is intentionally limited in ``create_upload_session`` to the
+    ``supplierMaterial`` purpose. Subsequent chunk operations remain protected by
+    the persisted creator id, so one portal supplier cannot resume another
+    supplier's upload.
+    """
+
+    internal_error: HTTPException
+    try:
+        current_user = await get_current_user(credentials, db)
+        return await get_current_active_user(current_user)
+    except HTTPException as exc:
+        internal_error = exc
+
+    if credentials is None:
+        raise internal_error
+    try:
+        portal = container.portal.resolve_principal(credentials.credentials)
+    except DomainError as exc:
+        raise internal_error from exc
+    return {
+        "id": portal.supplier_id,
+        "tenant_id": portal.tenant_id,
+        "role": "portal",
+        "status": "active",
+        "name": portal.name,
+        "auth_channel": "portal",
+    }
+
+
+UploadActor = Annotated[dict[str, Any], Depends(get_upload_actor)]
+
+
+def _assert_portal_upload_scope(current_user: dict[str, Any], body: CreateUploadSessionRequest) -> None:
+    if current_user.get("auth_channel") != "portal":
+        return
+    if body.purpose != "supplierMaterial":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "供应商门户只能上传投标材料"},
+        )
+    if body.resource_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "VALIDATION_ERROR", "message": "供应商材料上传必须指定 material resourceId"},
+        )
 
 
 def _request_id(request: Request) -> str:
@@ -86,9 +151,10 @@ def _as_uuid(value: object, field: str) -> UUID:
 async def create_upload_session(
     body: CreateUploadSessionRequest,
     request: Request,
-    current_user: AuthenticatedUser,
+    current_user: UploadActor,
     db: DBSession,
 ) -> JSONResponse:
+    _assert_portal_upload_scope(current_user, body)
     session = await FileService(db).create_upload_session(
         tenant_id=_as_uuid(current_user.get("tenant_id"), "tenant_id"),
         user_id=_as_uuid(current_user.get("id"), "user_id"),
@@ -106,7 +172,7 @@ async def create_upload_session(
 async def get_upload_session(
     upload_id: UUID,
     request: Request,
-    current_user: AuthenticatedUser,
+    current_user: UploadActor,
     db: DBSession,
 ) -> JSONResponse:
     session = await FileService(db).get_upload_session(
@@ -129,7 +195,7 @@ async def upload_part(
     part_number: int,
     body: Annotated[bytes, Body(media_type="application/octet-stream")],
     request: Request,
-    current_user: AuthenticatedUser,
+    current_user: UploadActor,
     db: DBSession,
 ) -> JSONResponse:
     _, etag = await FileService(db).upload_part(
@@ -146,7 +212,7 @@ async def complete_upload(
     upload_id: UUID,
     body: CompleteUploadRequest,
     request: Request,
-    current_user: AuthenticatedUser,
+    current_user: UploadActor,
     db: DBSession,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
 ) -> JSONResponse:
@@ -167,7 +233,7 @@ async def complete_upload(
 async def cancel_upload(
     upload_id: UUID,
     request: Request,
-    current_user: AuthenticatedUser,
+    current_user: UploadActor,
     db: DBSession,
 ) -> Response:
     await FileService(db).cancel_upload_session(
