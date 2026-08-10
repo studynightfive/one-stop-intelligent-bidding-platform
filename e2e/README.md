@@ -33,4 +33,4 @@ npm run test:smoke
 npm run test
 ```
 
-默认复用操作系统或 CI Runner 已安装的 Chrome，不额外下载浏览器。需要使用 Playwright 随附 Chromium 时，先执行 `npx playwright install chromium`，并设置 `E2E_BROWSER_CHANNEL=chromium`。
+默认复用操作系统或 CI Runner 已安装的 Chrome，不额外下载浏览器；失败现场使用截图和 trace 留存，因此也不依赖 Playwright 的 ffmpeg。需要使用 Playwright 随附 Chromium 时，先执行 `npx playwright install chromium`，并设置 `E2E_BROWSER_CHANNEL=chromium`。测试机已经安装 ffmpeg 且需要录像时，可设置 `E2E_VIDEO=true`。

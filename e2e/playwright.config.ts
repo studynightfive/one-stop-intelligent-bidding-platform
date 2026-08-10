@@ -19,7 +19,7 @@ export default defineConfig({
     channel: process.env.E2E_BROWSER_CHANNEL ?? 'chrome',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    video: process.env.E2E_VIDEO === 'true' ? 'retain-on-failure' : 'off',
     extraHTTPHeaders: { 'X-Request-Id': 'm7-e2e' },
   },
   projects: [
