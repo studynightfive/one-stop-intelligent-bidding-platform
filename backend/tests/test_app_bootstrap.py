@@ -75,6 +75,20 @@ def test_models_share_the_central_declarative_base() -> None:
         "portal_sessions",
         "score_items",
         "evaluation_reports",
+        "bid_tasks",
+        "bid_task_assignments",
+        "bid_materials",
+        "bid_tender_requirements",
+        "bid_documents",
+        "bid_document_versions",
+        "bid_review_reports",
+        "bid_review_findings",
+        "qualifications",
+        "qualification_versions",
+        "qualification_import_jobs",
+        "fragments",
+        "fragment_versions",
+        "fragment_references",
     }
     assert expected_tables <= set(Base.metadata.tables)
 
@@ -92,6 +106,9 @@ def test_merged_domain_routes_are_registered() -> None:
         "/api/v1/settings/model-providers",
         "/api/v1/audit-events",
         "/api/v1/global-search",
+        "/api/v1/bid-tasks",
+        "/api/v1/qualifications",
+        "/api/v1/fragments",
         "/api/v1/evaluations",
         "/api/v1/portal/session/exchange",
     } <= route_paths
