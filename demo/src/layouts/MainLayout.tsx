@@ -94,7 +94,7 @@ export default function MainLayout() {
     ],
     onClick: ({ key }: { key: string }) => {
       if (key === 'logout') {
-        logout()
+        void logout()
         message.success('已退出演示账号')
       } else if (key === 'settings') {
         goTo('/admin/settings')

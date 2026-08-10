@@ -2,19 +2,21 @@ import { useState } from 'react'
 import { Alert, Button, Checkbox, Divider, Form, Input, Modal, message } from 'antd'
 import { ArrowRight, Lock, Mail, ShieldCheck, Zap } from 'lucide-react'
 import { currentUser } from '../mock/data'
+import { requestPasswordReset, type LoginValues } from '../api/authApi'
+import { shouldUseMocks } from '../api/runtime'
 
-type LoginValues = { email: string; password: string; remember: boolean }
-
-export default function Login({ onLogin }: { onLogin: () => void | Promise<void> }) {
+export default function Login({ onLogin }: { onLogin: (values: LoginValues) => void | Promise<void> }) {
   const [submitting, setSubmitting] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
   const [forgotForm] = Form.useForm<{ email: string }>()
 
-  const submit = async (_values: LoginValues) => {
+  const submit = async (values: LoginValues) => {
     setSubmitting(true)
     try {
       await new Promise(resolve => window.setTimeout(resolve, 420))
-      await onLogin()
+      await onLogin(values)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '鐧诲綍澶辫触锛岃妫€鏌ヨ处鍙蜂笌瀵嗙爜')
     } finally {
       setSubmitting(false)
     }
@@ -22,6 +24,7 @@ export default function Login({ onLogin }: { onLogin: () => void | Promise<void>
 
   const sendResetEmail = async () => {
     const { email } = await forgotForm.validateFields()
+    if (!shouldUseMocks()) await requestPasswordReset(email)
     setForgotOpen(false)
     forgotForm.resetFields()
     message.success(`密码重置邮件已发送至 ${email}`)
