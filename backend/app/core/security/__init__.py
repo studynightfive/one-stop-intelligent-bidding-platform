@@ -3,8 +3,9 @@
 from app.core.security.jwt import (
     # file hash
     compute_sha256,
-    # jwt
     create_access_token,
+    # jwt
+    create_action_token,
     create_portal_token,
     create_refresh_token,
     decrypt_api_key,
@@ -27,6 +28,7 @@ __all__ = [
     "verify_password",
     # jwt
     "create_access_token",
+    "create_action_token",
     "create_refresh_token",
     "create_portal_token",
     "verify_token",

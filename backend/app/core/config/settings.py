@@ -110,6 +110,8 @@ class Settings(BaseSettings):
     mail_from: str = "no-reply@bid-platform.local"
     mail_username: str | None = None
     mail_password: str | None = None
+    mail_use_tls: bool = False
+    web_base_url: str = "http://127.0.0.1:3210"
 
     # === 日志配置 ===
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"

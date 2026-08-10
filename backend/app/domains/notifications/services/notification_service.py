@@ -152,6 +152,7 @@ class NotificationService:
         tenant_id: UUID,
         notification_type: NotificationType | None = None,
         unread_only: bool = False,
+        sort_order: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Notification], int, int]:
@@ -162,6 +163,7 @@ class NotificationService:
             tenant_id: 租户ID
             notification_type: 筛选类型
             unread_only: 仅未读
+            sort_order: 创建时间排序方向
             limit: 返回数量限制
             offset: 偏移量
 
@@ -191,9 +193,8 @@ class NotificationService:
         unread_count = unread_result.scalar_one()
 
         # 查询列表
-        stmt = (
-            select(Notification).where(*conditions).order_by(Notification.created_at.desc()).limit(limit).offset(offset)
-        )
+        created_at_order = Notification.created_at.asc() if sort_order == "asc" else Notification.created_at.desc()
+        stmt = select(Notification).where(*conditions).order_by(created_at_order).limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         notifications = list(result.scalars().all())
 

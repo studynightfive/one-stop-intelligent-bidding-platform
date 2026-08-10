@@ -178,6 +178,28 @@ def create_refresh_token(
     return jwt.encode(payload, _private_key_pem, algorithm=ALGORITHM)
 
 
+def create_action_token(
+    subject: str,
+    *,
+    token_type: str,
+    expires_delta: timedelta,
+    additional_claims: dict[str, Any] | None = None,
+) -> str:
+    """Create a short-lived, purpose-bound token for email actions."""
+    import jwt
+
+    payload: dict[str, Any] = {
+        "sub": subject,
+        "exp": datetime.now(UTC) + expires_delta,
+        "iat": datetime.now(UTC),
+        "type": token_type,
+        "jti": secrets.token_urlsafe(16),
+    }
+    if additional_claims:
+        payload.update(additional_claims)
+    return jwt.encode(payload, _private_key_pem, algorithm=ALGORITHM)
+
+
 def create_portal_token(
     subject: str,
     supplier_id: str,

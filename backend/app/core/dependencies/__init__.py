@@ -5,9 +5,11 @@
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -28,6 +30,7 @@ DbSession = AsyncSession
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)] = None,
+    db: Annotated[AsyncSession | None, Depends(get_db)] = None,
 ) -> CurrentUser:
     """获取当前认证用户.
 
@@ -74,12 +77,63 @@ async def get_current_user(
                 detail={"code": "UNAUTHENTICATED", "message": "无效的Token"},
             )
 
-        # TODO: 从数据库加载用户信息，验证用户状态
-        # 目前返回payload中的信息
+        token_tenant_id = payload.get("tenant_id")
+        token_role = payload.get("role", "member")
+        user_name: str | None = None
+        user_email: str | None = None
+        if not token_tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "UNAUTHENTICATED", "message": "Token缺少租户信息"},
+            )
+
+        # FastAPI 请求会注入数据库会话；直接调用该函数的轻量单元测试仍可只验证 JWT。
+        if db is not None:
+            from app.domains.auth.models.user import User, UserStatus
+
+            try:
+                normalized_user_id = UUID(str(user_id))
+                normalized_tenant_id = UUID(str(token_tenant_id))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"code": "UNAUTHENTICATED", "message": "Token身份信息无效"},
+                ) from exc
+
+            result = await db.execute(
+                select(User).where(
+                    User.id == normalized_user_id,
+                    User.tenant_id == normalized_tenant_id,
+                    User.deleted_at.is_(None),
+                )
+            )
+            user = result.scalar_one_or_none()
+            if user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"code": "UNAUTHENTICATED", "message": "用户不存在或已被删除"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            if user.status != UserStatus.ACTIVE:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"code": "ACCOUNT_DISABLED", "message": "账号尚未激活或已被禁用"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            token_role = user.role.value
+            user_name = user.name
+            user_email = user.email
+        else:
+            user_name = payload.get("name")
+            user_email = payload.get("email")
+
         return {
             "id": user_id,
-            "tenant_id": payload.get("tenant_id"),
-            "role": payload.get("role", "member"),
+            "tenant_id": token_tenant_id,
+            "role": token_role,
+            "status": "active",
+            "name": user_name,
+            "email": user_email,
             "jti": jti,  # 保存 jti 供 logout 使用
         }
 
@@ -115,12 +169,12 @@ async def get_current_active_user(
     Raises:
         HTTPException: 用户已被禁用
     """
-    # TODO: 从数据库检查用户状态是否为active
-    # if current_user.get("status") == "disabled":
-    #     raise HTTPException(
-    #         status_code=status.HTTP_401_UNAUTHORIZED,
-    #         detail={"code": "ACCOUNT_DISABLED", "message": "账号已被禁用"},
-    #     )
+    if current_user.get("status") not in (None, "active"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "ACCOUNT_DISABLED", "message": "账号尚未激活或已被禁用"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return current_user
 
 

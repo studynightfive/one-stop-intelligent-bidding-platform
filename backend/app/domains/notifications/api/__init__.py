@@ -6,41 +6,40 @@
 - POST /notifications/read-all - 全部已读
 """
 
-import contextlib
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 
 from app.core.dependencies import AuthenticatedUser, DBSession
 from app.core.errors import NotFoundError
+from app.core.http import pagination_meta, success_response
 from app.domains.notifications.models.notification import Notification, NotificationType
-from app.domains.notifications.schemas.notification import (
-    MarkAllReadResponse,
-    NotificationListResponse,
-    NotificationResponse,
-)
 from app.domains.notifications.services.notification_service import NotificationService
 
 router = APIRouter(prefix="/notifications", tags=["通知"])
 
 
-def _notification_to_response(notification: Notification) -> NotificationResponse:
-    """将Notification模型转换为响应模型."""
-    return NotificationResponse(
-        id=notification.id,
-        type=notification.type.value,
-        title=notification.title,
-        content=notification.content,
-        is_read=notification.is_read,
-        resource_type=notification.resource_type,
-        resource_id=notification.resource_id,
-        created_at=notification.created_at,
-    )
+def _notification_to_data(notification: Notification) -> dict[str, object]:
+    """Map a notification to the locked camelCase contract shape."""
+
+    data: dict[str, object] = {
+        "id": str(notification.id),
+        "type": notification.type.value,
+        "title": notification.title,
+        "content": notification.content,
+        "isRead": notification.is_read,
+        "createdAt": notification.created_at,
+    }
+    if notification.resource_type is not None:
+        data["resourceType"] = notification.resource_type
+    if notification.resource_id is not None:
+        data["resourceId"] = str(notification.resource_id)
+    return data
 
 
 @router.get(
     "",
-    response_model=NotificationListResponse,
     summary="通知列表",
     description="获取当前用户的通知列表。",
     responses={
@@ -48,21 +47,27 @@ def _notification_to_response(notification: Notification) -> NotificationRespons
     },
 )
 async def list_notifications(
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    unread_only: bool = Query(False),
+    page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+    unread_only: bool = Query(False, alias="unreadOnly"),
     notification_type: str | None = Query(None, alias="type"),
-) -> NotificationListResponse:
+    sort_by: str = Query("createdAt", alias="sortBy", pattern="^createdAt$"),
+    sort_order: str = Query("desc", alias="sortOrder", pattern="^(asc|desc)$"),
+) -> JSONResponse:
     """获取通知列表."""
     notification_service = NotificationService(db)
 
     # 解析通知类型
-    n_type = None
-    if notification_type:
-        with contextlib.suppress(ValueError):
-            n_type = NotificationType(notification_type)
+    try:
+        n_type = NotificationType(notification_type) if notification_type else None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "VALIDATION_ERROR", "message": "不支持的通知类型"},
+        ) from exc
 
     offset = (page - 1) * page_size
     notifications, total, unread_count = await notification_service.list_notifications(
@@ -70,20 +75,21 @@ async def list_notifications(
         tenant_id=UUID(current_user["tenant_id"]),
         notification_type=n_type,
         unread_only=unread_only,
+        sort_order=sort_order,
         limit=page_size,
         offset=offset,
     )
 
-    return NotificationListResponse(
-        notifications=[_notification_to_response(n) for n in notifications],
-        total=total,
-        unread_count=unread_count,
+    _ = unread_count, sort_by
+    return success_response(
+        [_notification_to_data(notification) for notification in notifications],
+        request=request,
+        meta=pagination_meta(page=page, page_size=page_size, total=total),
     )
 
 
 @router.patch(
     "/{notification_id}",
-    response_model=NotificationResponse,
     summary="标记已读",
     description="将通知标记为已读或未读。",
     responses={
@@ -93,18 +99,31 @@ async def list_notifications(
 )
 async def mark_notification_read(
     notification_id: UUID,
+    payload: dict[str, object],
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> NotificationResponse:
+    if_match: str = Header(..., alias="If-Match"),
+) -> JSONResponse:
     """标记通知已读."""
     notification_service = NotificationService(db)
+    if not if_match.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "VALIDATION_ERROR", "message": "If-Match 不能为空"},
+        )
+    if payload != {"isRead": True}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "VALIDATION_ERROR", "message": "isRead 必须为 true"},
+        )
 
     try:
         notification = await notification_service.mark_as_read(
             notification_id=notification_id,
             user_id=UUID(current_user["id"]),
         )
-        return _notification_to_response(notification)
+        return success_response(_notification_to_data(notification), request=request)
     except NotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -114,7 +133,6 @@ async def mark_notification_read(
 
 @router.post(
     "/read-all",
-    response_model=MarkAllReadResponse,
     summary="全部已读",
     description="将所有通知标记为已读。",
     responses={
@@ -122,9 +140,11 @@ async def mark_notification_read(
     },
 )
 async def mark_all_read(
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> MarkAllReadResponse:
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+) -> JSONResponse:
     """全部标记已读."""
     notification_service = NotificationService(db)
 
@@ -133,4 +153,5 @@ async def mark_all_read(
         tenant_id=UUID(current_user["tenant_id"]),
     )
 
-    return MarkAllReadResponse(updated_count=updated_count)
+    _ = idempotency_key
+    return success_response({"updatedCount": updated_count}, request=request)
