@@ -1,15 +1,10 @@
-﻿import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { ApiClient } from '../helpers/api-client';
+import { testIds } from '../helpers/testIds';
+import { BidWorkspacePage } from '../pages/bid-workspace-page';
+import { EvaluationWorkspacePage } from '../pages/evaluation-workspace-page';
+import { LoginPage } from '../pages/login-page';
 
-/**
- * Phase 0 / Phase 1 跨端 smoke：仅验证 API 可达 + Web 健康检查。
- *
- * 真正的登录 / 投标 / 评标 E2E 待 M1/M2/M3 接入 `data-testid` 后再扩展。
- * 当前用例保证：
- * 1. 后端 OpenAPI 文档可访问；
- * 2. /health/ready 返回 200；
- * 3. 不依赖 mock。
- */
 test.describe('m7 smoke @smoke', () => {
   test('backend OpenAPI is reachable', async ({ request }) => {
     const client = new ApiClient(request);
@@ -21,10 +16,43 @@ test.describe('m7 smoke @smoke', () => {
 
   test('ready health endpoint returns ok', async ({ request }) => {
     const client = new ApiClient(request);
-    // /health/ready 由 M4 暴露；当前 OpenAPI 仅锁定路径，状态码断言即可
-    const result = await client.send<unknown>({
+    const result = await client.send<{ status: string }>({
       path: '/api/v1/health/ready',
     });
-    expect(result).toBeDefined();
+    expect(result.status).toBe('ok');
+  });
+
+  test('login and primary page navigation render without dead routes', async ({ page }) => {
+    const login = new LoginPage(page);
+    await login.goto();
+    await login.login(
+      process.env.E2E_ADMIN_EMAIL ?? 'admin@bid-platform.dev',
+      process.env.E2E_ADMIN_PASSWORD ?? 'DemoAdmin123!',
+    );
+    await login.expectLoaded();
+
+    const bids = new BidWorkspacePage(page);
+    await bids.goto();
+    await bids.clickCreate();
+
+    await page.goto('/tasks/TASK-2026-002');
+    await expect(page.getByTestId(testIds.bidDetail)).toBeVisible();
+
+    const evaluations = new EvaluationWorkspacePage(page);
+    await evaluations.goto();
+    await evaluations.clickCreate();
+
+    await page.goto('/evaluation/0190f4dd-0000-7000-8000-000000000601');
+    await expect(page.getByTestId(testIds.evaluationDetail)).toBeVisible();
+
+    for (const [path, selector] of [
+      ['/admin/qualifications', 'qualification-library-page'],
+      ['/admin/fragments', 'fragment-library-page'],
+      ['/admin/users', 'user-permissions-page'],
+      ['/admin/settings', 'system-settings-page'],
+    ] as const) {
+      await page.goto(path);
+      await expect(page.getByTestId(selector)).toBeVisible();
+    }
   });
 });

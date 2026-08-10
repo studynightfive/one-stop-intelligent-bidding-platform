@@ -1,22 +1,25 @@
-﻿import type { Locator, Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { testIds } from '../helpers/testIds';
 
-/**
- * 投标工作台 Page Object（M1 拥有，本 Phase 仅为 Phase 2+ smoke 准备）。
- */
 export class BidWorkspacePage {
-  constructor(private readonly page: Page) {}
+  private readonly page: Page;
+
+  constructor(page: Page) {
+    this.page = page;
+  }
 
   async goto(): Promise<void> {
-    await this.page.goto('/bids');
+    await this.page.goto('/dashboard');
+    await this.page.getByTestId(testIds.bidDashboard).waitFor({ state: 'visible' });
   }
 
   async clickCreate(): Promise<void> {
-    await this.page.click(`[data-testid="${testIds.bidCreateButton}"]`);
+    await this.page.getByTestId(testIds.bidCreateButton).click();
+    await this.page.getByTestId(testIds.bidCreate).waitFor({ state: 'visible' });
   }
 
-  async expectTitleVisible(): Promise<void> {
-    const title: Locator = this.page.locator(`[data-testid="${testIds.bidDetailTitle}"]`);
-    await title.first().waitFor({ state: 'visible', timeout: 5_000 });
+  async expectDetailVisible(): Promise<void> {
+    const detail: Locator = this.page.getByTestId(testIds.bidDetail);
+    await detail.waitFor({ state: 'visible', timeout: 10_000 });
   }
 }

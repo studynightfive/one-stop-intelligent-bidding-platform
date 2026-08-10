@@ -3,13 +3,18 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "npm@11.13.0",
+  "engines": {
+    "node": "24.16.x",
+    "npm": "11.13.x"
+  },
   "description": "M7 跨端 Playwright E2E（投标/评标/Portal）。",
   "scripts": {
     "test": "playwright test",
     "test:smoke": "playwright test --grep @smoke",
     "test:headed": "playwright test --headed",
     "test:report": "playwright show-report",
-    "lint": "eslint . --ext .ts,.tsx",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -17,7 +22,7 @@
     "@types/node": "22.10.5",
     "typescript": "5.9.3",
     "eslint": "9.17.0",
-    "@typescript-eslint/parser": "8.18.2",
-    "@typescript-eslint/eslint-plugin": "8.18.2"
+    "@typescript-eslint/parser": "8.66.0",
+    "@typescript-eslint/eslint-plugin": "8.66.0"
   }
 }

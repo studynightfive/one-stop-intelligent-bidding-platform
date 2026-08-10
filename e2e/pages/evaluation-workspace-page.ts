@@ -1,22 +1,25 @@
-﻿import type { Locator, Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { testIds } from '../helpers/testIds';
 
-/**
- * 评标工作台 Page Object（M2 拥有，本 Phase 仅为 Phase 3+ smoke 准备）。
- */
 export class EvaluationWorkspacePage {
-  constructor(private readonly page: Page) {}
+  private readonly page: Page;
+
+  constructor(page: Page) {
+    this.page = page;
+  }
 
   async goto(): Promise<void> {
-    await this.page.goto('/evaluations');
+    await this.page.goto('/evaluation');
+    await this.page.getByTestId(testIds.evaluationDashboard).waitFor({ state: 'visible' });
   }
 
   async clickCreate(): Promise<void> {
-    await this.page.click(`[data-testid="${testIds.evaluationCreateButton}"]`);
+    await this.page.getByTestId(testIds.evaluationCreateButton).click();
+    await this.page.getByTestId(testIds.evaluationCreate).waitFor({ state: 'visible' });
   }
 
-  async expectRiskListVisible(): Promise<void> {
-    const list: Locator = this.page.locator(`[data-testid="${testIds.evaluationRiskList}"]`);
-    await list.first().waitFor({ state: 'visible', timeout: 5_000 });
+  async expectDetailVisible(): Promise<void> {
+    const detail: Locator = this.page.getByTestId(testIds.evaluationDetail);
+    await detail.waitFor({ state: 'visible', timeout: 10_000 });
   }
 }

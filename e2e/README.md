@@ -1,33 +1,36 @@
-﻿# M7 跨端 Playwright E2E
+# M7 跨端 Playwright E2E
 
-本目录由 M7 独占，V3.1 § 14.2 验收清单的全量 E2E 在此维护。
+本目录维护真实 API 模式下的跨端验收，不使用前端 Mock，也不保留跳过的占位用例。
 
-## 当前状态（Phase 0 / Phase 1）
+## 覆盖范围
 
-- `playwright.config.ts`：3 viewport（1440 / 1024 / 390）+ webServer 占位
-- `helpers/testIds.ts`：跨域稳定选择器字典（M1/M2/M3 负责填充真实 ID）
-- `helpers/api-client.ts`：极简 API Client，仅做 Phase 0 后端可达性断言
-- `pages/login-page.ts` / `pages/bid-workspace-page.ts` / `pages/evaluation-workspace-page.ts`：
-  Page Object 占位，Phase 1+ 接入
-- `specs/smoke.spec.ts`：API 可达 + 健康检查 smoke（`@smoke`）
-- `specs/business-flow.spec.ts`：V3.1 § 14.2 清单占位（`@contract`）
+- 桌面、平板、移动端：登录、投标工作台、投标创建/详情、评标工作台、评标创建/详情、四个管理页面。
+- 投标闭环：上传招标文件 → 创建任务 → AI 解析 → AI 审核 → 按模板逐段生成技术文档 → 嵌入图片 → 下载并校验 DOCX。
+- 评标闭环：发布邀请 → 两家供应商提交 → AI 材料/风险/评分 → 人工复核 → 生成 PDF/DOCX 报告 → 关闭评标。
+- 门户隔离：两个供应商令牌只能读取各自身份和材料上下文。
 
-## CI 启用条件
+## 前置条件
 
-需由 L0 在 `infra/compose.yaml` 中加入 demo + api 服务且启动后再启用；
-当前 `webServer.reuseExistingServer = true`，由 `start.sh / start.ps1` 预先启动。
+先用隔离的 Compose 项目启动 `api` 和 `web`。Playwright 不隐式创建或遗留 Docker 资源，端口通过环境变量传入：
 
-## 安装
+```powershell
+$env:WEB_PORT = '33210'
+$env:API_PORT = '38210'
+$env:E2E_BASE_URL = 'http://127.0.0.1:33210'
+$env:E2E_API_URL = 'http://127.0.0.1:38210'
+npm run test
+```
+
+业务流会创建带随机后缀的测试任务，不依赖可重复消费的预置邀请码。状态变更用例仅在 desktop 项目执行一次，页面 smoke 在三个 viewport 都执行。
+
+## 命令
 
 ```bash
 npm ci --ignore-scripts
-npx playwright install --with-deps chromium
+npm run typecheck
+npm run lint
+npm run test:smoke
+npm run test
 ```
 
-## 运行
-
-```bash
-npm run test           # 全部
-npm run test:smoke     # 仅 @smoke
-npm run typecheck      # 仅类型检查
-```
+默认复用操作系统或 CI Runner 已安装的 Chrome，不额外下载浏览器。需要使用 Playwright 随附 Chromium 时，先执行 `npx playwright install chromium`，并设置 `E2E_BROWSER_CHANNEL=chromium`。
