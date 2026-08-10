@@ -188,6 +188,7 @@ describe('M2 evaluation routes and navigation', () => {
   })
 
   it('shows dashboard loading skeleton while API calls are in flight', () => {
+    getMock.mockImplementation(() => new Promise(() => undefined))
     renderWithDemo(<EvaluationDashboardView />)
     expect(screen.getByTestId(EVAL_TEST_IDS.dashboard)).toBeTruthy()
   })
