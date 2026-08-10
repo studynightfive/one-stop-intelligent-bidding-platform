@@ -164,7 +164,9 @@ export default function TaskDetailView() {
   const task = mockMode ? bidTasks.find(t => t.id === id) : liveTask
   const relatedEvaluation = task?.linkedEvaluationId
     ? { id: task.linkedEvaluationId }
-    : evaluationTasks.find(item => item.tenderNo === task?.tenderNo)
+    : mockMode
+      ? evaluationTasks.find(item => item.tenderNo === task?.tenderNo)
+      : undefined
   const taskMaterials = mockMode ? getTaskMaterials(task?.id) : liveMaterials
   const have = taskMaterials.filter(m => ['have', 'uploaded', 'template'].includes(m.status)).length
   const missing = taskMaterials.filter(m => ['missing', 'pending', 'rejected'].includes(m.status)).length
