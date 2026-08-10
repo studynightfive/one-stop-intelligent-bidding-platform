@@ -28,7 +28,7 @@ x-backend-environment: &backend-environment
   DEMO_SEED_ENABLED: ${DEMO_SEED_ENABLED:-true}
   DEMO_TENANT_ID: ${DEMO_TENANT_ID:-0190f4dd-0000-7000-8000-000000000002}
   DEMO_ADMIN_USER_ID: ${DEMO_ADMIN_USER_ID:-0190f4dd-0000-7000-8000-000000000001}
-  DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-admin@bid-platform.local}
+  DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-admin@bid-platform.dev}
   DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-DemoAdmin123!}
   DEMO_ADMIN_NAME: ${DEMO_ADMIN_NAME:-演示管理员}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3210}
@@ -118,7 +118,7 @@ services:
     build:
       context: ..
       dockerfile: infra/backend.Dockerfile
-    image: bidplat2026/api:local
+    image: ${API_IMAGE:-bidplat2026/api:local}
     command: ["/bin/sh", "-c", "alembic upgrade head && python -m app.domains.auth.bootstrap && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     environment: *backend-environment
     ports:
@@ -148,7 +148,7 @@ services:
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8210/api/v1}
         VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
-    image: bidplat2026/web:local
+    image: ${WEB_IMAGE:-bidplat2026/web:local}
     ports:
       - "127.0.0.1:${WEB_PORT:-3210}:3210"
     depends_on:
@@ -164,7 +164,7 @@ services:
 
   worker:
     profiles: ["workers"]
-    image: bidplat2026/api:local
+    image: ${API_IMAGE:-bidplat2026/api:local}
     command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
     environment: *backend-environment
     volumes:
@@ -177,7 +177,7 @@ services:
 
   flower:
     profiles: ["workers", "observability"]
-    image: bidplat2026/api:local
+    image: ${API_IMAGE:-bidplat2026/api:local}
     command: ["celery", "-A", "app.workers.celery_app", "flower", "--port=5555"]
     environment: *backend-environment
     ports:
