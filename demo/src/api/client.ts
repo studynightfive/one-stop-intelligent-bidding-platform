@@ -25,6 +25,8 @@ export interface ApiRequestOptions {
   ifMatch?: string | number
   idempotencyKey?: string
   responseType?: 'json' | 'blob' | 'text'
+  /** Use `raw` for Blob/ArrayBuffer payloads such as resumable upload parts. */
+  bodyMode?: 'json' | 'raw'
   preserveEnvelope?: boolean
 }
 
@@ -132,17 +134,24 @@ export class ApiClient {
     if (token) headers.set('Authorization', `Bearer ${token}`)
     if (options.ifMatch !== undefined) headers.set('If-Match', String(options.ifMatch))
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
-    if (options.body !== undefined && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json')
+    const isFormData = options.body instanceof FormData
+    const isRawBody = options.bodyMode === 'raw'
+    if (options.body !== undefined && !isFormData && !headers.has('Content-Type')) {
+      const blobType = options.body instanceof Blob ? options.body.type : ''
+      headers.set('Content-Type', isRawBody ? blobType || 'application/octet-stream' : 'application/json')
+    }
+
+    const requestBody = options.body === undefined
+      ? undefined
+      : isFormData || isRawBody
+        ? options.body as BodyInit
+        : JSON.stringify(options.body)
 
     try {
       const response = await this.fetchImpl(`${joinUrl(this.baseUrl, path)}${buildQuery(options.query)}`, {
         method: options.method ?? 'GET',
         headers,
-        body: options.body === undefined
-          ? undefined
-          : options.body instanceof FormData
-            ? options.body
-            : JSON.stringify(options.body),
+        body: requestBody,
         signal: abort.signal,
         credentials: 'include',
       })

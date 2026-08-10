@@ -102,4 +102,24 @@ describe('ApiClient', () => {
     expect(result).toBeInstanceOf(Blob)
     expect(new Headers(vi.mocked(fetchMock).mock.calls[0][1]?.headers).get('Idempotency-Key')).toBe('idem-1')
   })
+
+  it('sends upload parts as raw binary without JSON serialization', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      success: true,
+      data: { partNumber: 1, etag: 'real-etag' },
+      requestId: 'upload-request',
+    })) as unknown as typeof fetch
+    const client = new ApiClient({ baseUrl: '/api/v1', fetchImpl: fetchMock })
+    const part = new Blob(['binary-part'], { type: 'application/octet-stream' })
+
+    await expect(client.put<{ partNumber: number; etag: string }>(
+      '/files/upload-sessions/U1/parts/1',
+      part,
+      { bodyMode: 'raw' },
+    )).resolves.toEqual({ partNumber: 1, etag: 'real-etag' })
+
+    const init = vi.mocked(fetchMock).mock.calls[0][1]
+    expect(init?.body).toBe(part)
+    expect(new Headers(init?.headers).get('Content-Type')).toBe('application/octet-stream')
+  })
 })
