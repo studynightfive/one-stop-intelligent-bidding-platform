@@ -38,7 +38,7 @@ def parse_bool(value: Any, *, field: str) -> bool:
     return value
 
 
-def parse_non_negative_int(value: Any, *, field: str) -> int:
+def parse_non_negative_int(value: object, *, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise validation_error(
             "整数字段格式错误",

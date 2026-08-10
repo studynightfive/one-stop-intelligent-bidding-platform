@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
-from app.contracts.generated.models import CreateQualificationRequest, UpdateQualificationRequest
+if TYPE_CHECKING:
+    from pydantic import BaseModel as CreateQualificationRequest
+    from pydantic import BaseModel as UpdateQualificationRequest
+else:
+    from app.contracts.generated.models import CreateQualificationRequest, UpdateQualificationRequest
 from app.domains.bids.errors import DomainError
 from app.domains.bids.http import domain_http_exception, get_actor, request_id, require_if_match, success
 from app.domains.bids.ports import AuthPrincipal
