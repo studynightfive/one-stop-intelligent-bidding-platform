@@ -313,7 +313,7 @@ async def test_demo_admin_bootstrap_is_development_only_and_idempotent(db_sessio
         environment="development",
         tenant_id=tenant_id,
         user_id=user_id,
-        email="demo-admin@example.test",
+        email="demo-admin@example.com",
         password="DemoAdmin123!",
         name="Demo Admin",
     )
@@ -326,6 +326,33 @@ async def test_demo_admin_bootstrap_is_development_only_and_idempotent(db_sessio
     assert user.role == UserRole.ADMIN
     assert user.status == UserStatus.ACTIVE
     assert user.password_hash and verify_password(config.password, user.password_hash)
+
+    rotated = DemoAdminConfig(
+        enabled=True,
+        environment="development",
+        tenant_id=tenant_id,
+        user_id=user_id,
+        email="demo-admin-rotated@example.com",
+        password=config.password,
+        name=config.name,
+    )
+    assert await ensure_demo_admin(db_session, rotated) == "updated"
+    assert await UserService(db_session).get_user_by_email(config.email, tenant_id) is None
+    rotated_user = await UserService(db_session).get_user_by_email(rotated.email, tenant_id)
+    assert rotated_user is not None
+    assert rotated_user.id == user_id
+
+    invalid_email = DemoAdminConfig(
+        enabled=True,
+        environment="development",
+        tenant_id=tenant_id,
+        user_id=user_id,
+        email="admin@bid-platform.local",
+        password=config.password,
+        name=config.name,
+    )
+    with pytest.raises(RuntimeError, match="valid non-reserved"):
+        invalid_email.validate()
 
     production = DemoAdminConfig(
         enabled=True,

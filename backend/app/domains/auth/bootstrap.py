@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from uuid import UUID
 
+from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +37,7 @@ class DemoAdminConfig:
             environment=os.getenv("ENVIRONMENT", "development"),
             tenant_id=UUID(os.getenv("DEMO_TENANT_ID", "0190f4dd-0000-7000-8000-000000000002")),
             user_id=UUID(os.getenv("DEMO_ADMIN_USER_ID", "0190f4dd-0000-7000-8000-000000000001")),
-            email=os.getenv("DEMO_ADMIN_EMAIL", "admin@bid-platform.local").strip().lower(),
+            email=os.getenv("DEMO_ADMIN_EMAIL", "admin@bid-platform.dev").strip().lower(),
             password=os.getenv("DEMO_ADMIN_PASSWORD", "DemoAdmin123!"),
             name=os.getenv("DEMO_ADMIN_NAME", "演示管理员").strip(),
         )
@@ -46,8 +47,10 @@ class DemoAdminConfig:
             return
         if self.environment != "development":
             raise RuntimeError("DEMO_SEED_ENABLED is only permitted when ENVIRONMENT=development")
-        if "@" not in self.email:
-            raise RuntimeError("DEMO_ADMIN_EMAIL must be a valid email address")
+        try:
+            validate_email(self.email, check_deliverability=False)
+        except EmailNotValidError as exc:
+            raise RuntimeError("DEMO_ADMIN_EMAIL must be a valid non-reserved email address") from exc
         if len(self.password) < 8:
             raise RuntimeError("DEMO_ADMIN_PASSWORD must contain at least 8 characters")
         if not self.name:
@@ -61,13 +64,11 @@ async def ensure_demo_admin(db: AsyncSession, config: DemoAdminConfig) -> str:
     if not config.enabled:
         return "disabled"
 
-    result = await db.execute(
-        select(User).where(
-            User.tenant_id == config.tenant_id,
-            User.email == config.email,
-        )
-    )
+    result = await db.execute(select(User).where(User.tenant_id == config.tenant_id, User.id == config.user_id))
     user = result.scalar_one_or_none()
+    if user is None:
+        result = await db.execute(select(User).where(User.tenant_id == config.tenant_id, User.email == config.email))
+        user = result.scalar_one_or_none()
     action = "updated"
     if user is None:
         action = "created"
@@ -79,6 +80,7 @@ async def ensure_demo_admin(db: AsyncSession, config: DemoAdminConfig) -> str:
         )
         db.add(user)
 
+    user.email = config.email
     user.password_hash = get_password_hash(config.password)
     user.name = config.name
     user.role = UserRole.ADMIN
