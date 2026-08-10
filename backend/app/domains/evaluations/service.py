@@ -19,7 +19,6 @@ from app.domains.evaluations.entities import (
 )
 from app.domains.evaluations.errors import (
     conflict,
-    deadline_passed,
     not_found,
     validation_error,
     version_conflict,
@@ -465,12 +464,13 @@ class EvaluationService:
         }
 
     async def publish(self, actor: AuthPrincipal, evaluation_id: str, *, idempotency_key: str | None) -> dict[str, Any]:
-        if idempotency_key:
-            cached = self.store.get_idempotency(f"publish:{idempotency_key}")
-            if cached is not None:
-                return cast(dict[str, Any], cached)
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_owner(actor, entity)
+        cache_key = f"publish:{actor.tenant_id}:{evaluation_id}:{idempotency_key}" if idempotency_key else None
+        if idempotency_key:
+            cached = self.store.get_idempotency(cast(str, cache_key))
+            if cached is not None:
+                return cast(dict[str, Any], cached)
         assert_evaluation_transition(entity.status, "collecting")
         validation = validate_evaluation(entity, now=_now())
         if not validation["valid"]:
@@ -520,8 +520,8 @@ class EvaluationService:
         entity.updated_at = now
         saved = self.store.save_evaluation(entity)
         result = {"evaluation": evaluation_dict(saved, store=self.store), "invites": invites}
-        if idempotency_key:
-            self.store.remember_idempotency(f"publish:{idempotency_key}", result)
+        if cache_key:
+            self.store.remember_idempotency(cache_key, result)
         await self.audit.append(
             AuditEventInput(
                 tenant_id=actor.tenant_id,
@@ -569,17 +569,19 @@ class EvaluationService:
     async def close(
         self, actor: AuthPrincipal, evaluation_id: str, result_summary: str, *, idempotency_key: str | None
     ) -> dict[str, Any]:
-        if idempotency_key:
-            cached = self.store.get_idempotency(f"close:{idempotency_key}")
-            if cached is not None:
-                return cast(dict[str, Any], cached)
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_owner(actor, entity)
+        summary = result_summary.strip()
+        if not summary:
+            raise validation_error("评标结果摘要不能为空")
+        cache_key = f"close:{actor.tenant_id}:{evaluation_id}:{idempotency_key}" if idempotency_key else None
+        if cache_key:
+            cached = self.store.get_idempotency(cache_key)
+            if cached is not None:
+                return cast(dict[str, Any], cached)
         assert_evaluation_transition(entity.status, "closed")
-        if entity.supplier_deadline > _now() and entity.status == "collecting":
-            raise deadline_passed("收集期未结束，不能关闭")
         entity.status = "closed"
-        entity.result_summary = result_summary.strip()
+        entity.result_summary = summary
         entity.current_step = 6
         entity.progress_percent = 100
         entity.version += 1
@@ -589,8 +591,8 @@ class EvaluationService:
                 supplier.invite_status = "expired"
         saved = self.store.save_evaluation(entity)
         result = evaluation_dict(saved, store=self.store)
-        if idempotency_key:
-            self.store.remember_idempotency(f"close:{idempotency_key}", result)
+        if cache_key:
+            self.store.remember_idempotency(cache_key, result)
         await self.audit.append(
             AuditEventInput(
                 tenant_id=actor.tenant_id,
@@ -600,7 +602,7 @@ class EvaluationService:
                 actor_id=actor.user_id,
                 actor_name=actor.name,
                 action="evaluation.closed",
-                summary=f"关闭评标：{result_summary.strip()}",
+                summary=f"关闭评标：{summary}",
             )
         )
         return result

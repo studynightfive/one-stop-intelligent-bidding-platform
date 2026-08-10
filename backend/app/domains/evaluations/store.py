@@ -147,9 +147,21 @@ class EvaluationStore:
                 return copy.deepcopy(item)
         return None
 
-    def find_quote_by_idempotency(self, key: str) -> QuoteSubmissionEntity | None:
+    def find_quote_by_idempotency(
+        self,
+        *,
+        evaluation_id: str,
+        round_id: str,
+        supplier_id: str,
+        key: str,
+    ) -> QuoteSubmissionEntity | None:
         for item in self.quotes.values():
-            if item.idempotency_key == key:
+            if (
+                item.evaluation_id == evaluation_id
+                and item.round_id == round_id
+                and item.supplier_id == supplier_id
+                and item.idempotency_key == key
+            ):
                 return copy.deepcopy(item)
         return None
 
