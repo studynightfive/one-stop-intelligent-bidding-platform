@@ -127,6 +127,40 @@ def _bid_generate_handler(request: GenerationRequest, payload_text: str) -> dict
     }
 
 
+def _bid_generate_plan_handler(request: GenerationRequest, payload_text: str) -> dict[str, Any]:
+    return {
+        "planApproved": True,
+        "sectionPlan": [],
+        "warnings": [],
+        "provider": "fake",
+    }
+
+
+def _bid_generate_paragraph_handler(request: GenerationRequest, payload_text: str) -> dict[str, Any]:
+    heading_match = re.search(r"## 当前章节\n([^\n]+)", payload_text)
+    paragraph_match = re.search(r"当前段落：(\d+)/(\d+)", payload_text)
+    heading = heading_match.group(1).strip() if heading_match else "技术方案"
+    paragraph_index = int(paragraph_match.group(1)) if paragraph_match else 1
+    paragraph_count = int(paragraph_match.group(2)) if paragraph_match else 1
+    paragraph = (
+        f"{heading}第{paragraph_index}段围绕招标要求展开说明。"
+        "方案以需求可追溯、实施过程可检查、交付结果可验收为原则，结合已提供的项目资料明确工作边界、"
+        "技术路径和质量控制措施，并通过阶段评审、问题闭环与版本留痕保证方案执行的一致性。"
+        f"本段为该章节共{paragraph_count}段中的第{paragraph_index}段，正式提交前仍需项目负责人复核事实依据。"
+    )
+    return {
+        "paragraph": paragraph,
+        "evidence": [
+            {
+                "sourceType": "project_context",
+                "sourceId": "offline-demo",
+                "summary": "依据当前任务提供的项目资料生成，需人工复核。",
+            }
+        ],
+        "provider": "fake",
+    }
+
+
 def _risk_check_handler(request: GenerationRequest, payload_text: str) -> dict[str, Any]:
     return {
         "findings": [],
@@ -172,6 +206,8 @@ _BUILTIN_HANDLERS: dict[str, Handler] = {
     "material_match": _material_match_handler,
     "bid_review": _bid_review_handler,
     "bid_generate": _bid_generate_handler,
+    "bid_generate_plan": _bid_generate_plan_handler,
+    "bid_generate_paragraph": _bid_generate_paragraph_handler,
     "risk_check": _risk_check_handler,
     "evaluation_check": _evaluation_check_handler,
     "evaluation_score": _evaluation_score_handler,

@@ -120,6 +120,63 @@ def build_bid_generate_template() -> PromptTemplate:
     )
 
 
+_BID_GENERATE_PLAN_SYSTEM = (
+    "你是技术标书生成规划助手。输入模板已经锁定章节顺序、标题级别和段落数量，"
+    "不得增加、删除、重排或重命名章节。只分析逐段生成顺序、上下文依赖和风险，输出严格 JSON。"
+)
+_BID_GENERATE_PLAN_USER = (
+    "## 模板名称\n{templateName}\n\n"
+    "## 锁定章节\n{sections}\n\n"
+    "## 锁定图片锚点\n{imageAnchors}\n\n"
+    "## 受限项目上下文\n{context}\n\n"
+    "输出 planApproved、sectionPlan、warnings。sectionPlan 必须与锁定章节顺序完全一致。"
+)
+
+
+def build_bid_generate_plan_template() -> PromptTemplate:
+    return PromptTemplate(
+        name="bid_generate_plan",
+        version="1.0.0",
+        system_prompt=_BID_GENERATE_PLAN_SYSTEM,
+        user_template=_BID_GENERATE_PLAN_USER,
+        model="qwen-plus",
+        temperature=0.1,
+        max_output_tokens=4096,
+    )
+
+
+_BID_GENERATE_PARAGRAPH_SYSTEM = (
+    "你是技术标书逐段撰写助手。每次只生成一个正文段落，禁止输出标题、相邻段落或 Markdown 代码块；"
+    "必须遵守给定章节说明和目标字数，不得编造未提供的资质、案例、参数或图片内容。"
+    "输出严格 JSON：paragraph 为正文，evidence 为本段采用的来源数组。"
+)
+_BID_GENERATE_PARAGRAPH_USER = (
+    "## 模板\n{templateName}\n\n"
+    "## 当前章节\n{sectionHeading}\n"
+    "标题级别：{headingLevel}\n"
+    "章节要求：{sectionInstructions}\n"
+    "当前段落：{paragraphIndex}/{paragraphCount}\n"
+    "目标字数：{targetWords}\n"
+    "必须提供依据：{requireEvidence}\n\n"
+    "## 本章节图片锚点（仅可依据说明文字引用，不得臆测图片内容）\n{imageAnchors}\n\n"
+    "## 已批准生成计划\n{approvedPlan}\n\n"
+    "## 受限上下文\n{context}\n\n"
+    "只输出 paragraph 与 evidence 字段；本次只生成第 {paragraphIndex} 段。"
+)
+
+
+def build_bid_generate_paragraph_template() -> PromptTemplate:
+    return PromptTemplate(
+        name="bid_generate_paragraph",
+        version="1.0.0",
+        system_prompt=_BID_GENERATE_PARAGRAPH_SYSTEM,
+        user_template=_BID_GENERATE_PARAGRAPH_USER,
+        model="qwen-plus",
+        temperature=0.25,
+        max_output_tokens=4096,
+    )
+
+
 _RISK_CHECK_SYSTEM = (
     "你是评标风险识别助手，需要识别串标、异常报价、围标等高风险行为。"
     "所有结论必须附带证据 + 置信度，并由人工最终裁决。"
@@ -213,6 +270,8 @@ def all_template_factories() -> list[PromptFactory]:
         build_material_match_template,
         build_bid_review_template,
         build_bid_generate_template,
+        build_bid_generate_plan_template,
+        build_bid_generate_paragraph_template,
         build_risk_check_template,
         build_evaluation_check_template,
         build_evaluation_score_template,
@@ -223,6 +282,8 @@ def all_template_factories() -> list[PromptFactory]:
 __all__ = [
     "all_template_factories",
     "build_bid_generate_template",
+    "build_bid_generate_paragraph_template",
+    "build_bid_generate_plan_template",
     "build_bid_review_template",
     "build_evaluation_check_template",
     "build_evaluation_score_template",
