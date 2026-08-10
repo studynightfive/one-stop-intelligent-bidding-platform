@@ -69,7 +69,7 @@ describe('ApiClient', () => {
     expect(error).toBeInstanceOf(VersionConflictError)
     expect(error.requestId).toBe('conflict-request')
     expect(error.details).toEqual({ currentVersion: 3 })
-    expect(new Headers(vi.mocked(fetchMock).mock.calls[0][1]?.headers).get('If-Match')).toBe('2')
+    expect(new Headers(vi.mocked(fetchMock).mock.calls[0][1]?.headers).get('If-Match')).toBe('"2"')
   })
 
   it('maps FastAPI detail errors before the global envelope handler runs', async () => {

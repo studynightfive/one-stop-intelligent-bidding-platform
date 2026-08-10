@@ -1,11 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Form, Input, Modal, Pagination, Segmented, Select, Switch, Table, Tag, message } from 'antd'
 import { BookOpen, Clock, FileStack, FileText, GraduationCap, History, Lightbulb, Package, Plus, Quote, Search, Sparkles, Trash2, TrendingUp, Wrench } from 'lucide-react'
 import { fragmentCategories } from '../mock/data'
 import { useDemo } from '../context/DemoContext'
-import { ConfirmAction, EmptyState, FilePreview, FilterBar, PermissionGate } from '../components/common'
+import { AppUpload, ConfirmAction, EmptyState, FilePreview, FilterBar, PermissionGate } from '../components/common'
 import { appendLibraryVersion, nextDocumentVersion, paginate, rankFragmentsSemantic } from '../features/libraries/utils'
 import type { FragmentRecord } from '../features/libraries/types'
+import { platformApi, type Fragment } from '../api/platformApi'
+import { shouldUseMocks } from '../api/runtime'
+import { createHttpBidApi } from '../features/bids/adapters/httpBidApi'
 
 const categoryIcons: Record<string, typeof FileText> = {
   产品手册: Package,
@@ -17,7 +20,11 @@ const categoryIcons: Record<string, typeof FileText> = {
 }
 
 export default function FragmentLibrary() {
-  const { fragments, setFragments, permissions } = useDemo()
+  const { fragments, setFragments, permissions, bidTasks } = useDemo()
+  const mockMode = shouldUseMocks()
+  const [loading, setLoading] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [semanticResults, setSemanticResults] = useState<FragmentRecord[]>([])
   const [category, setCategory] = useState('全部')
   const [query, setQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'keyword' | 'semantic'>('keyword')
@@ -28,6 +35,51 @@ export default function FragmentLibrary() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(9)
   const [form] = Form.useForm()
+  const selectedFileName = Form.useWatch('fileName', form)
+
+  const normalizeFragment = useCallback((record: Fragment): FragmentRecord => ({
+    id: record.id,
+    title: record.title,
+    category: record.category,
+    preview: record.summary,
+    content: record.content,
+    tags: record.tags,
+    useCount: record.useCount,
+    updatedAt: new Date(record.updatedAt).toLocaleString('zh-CN', { hour12: false }),
+    fileName: record.sourceFile?.fileName,
+    fileId: record.sourceFile?.id,
+    source: record.sourceFile?.fileName || '手工录入',
+    version: record.documentVersion,
+    apiVersion: record.version,
+    matchScore: record.matchScore,
+    matchReason: record.matchReason,
+    references: [],
+    versions: [{
+      version: record.documentVersion,
+      fileName: record.sourceFile?.fileName,
+      changeNote: '当前生效版本',
+      createdAt: new Date(record.updatedAt).toLocaleString('zh-CN', { hour12: false }),
+      createdBy: '系统',
+    }],
+  }), [])
+
+  const refreshFragments = useCallback(async () => {
+    if (mockMode) return
+    setLoading(true)
+    try {
+      const result = await platformApi.listFragments({ page: 1, pageSize: 100, sortBy: 'updatedAt', sortOrder: 'desc' })
+      setFragments(result.data.map(normalizeFragment))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '片段列表加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [mockMode, normalizeFragment, setFragments])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void refreshFragments(), 0)
+    return () => window.clearTimeout(timeout)
+  }, [refreshFragments])
 
   const normalized = useMemo(() => (fragments as FragmentRecord[]).map(record => ({
     ...record,
@@ -37,11 +89,30 @@ export default function FragmentLibrary() {
     references: record.references || [],
   })), [fragments])
 
+  useEffect(() => {
+    if (mockMode || searchMode !== 'semantic' || !query.trim()) return
+    let active = true
+    const timeout = window.setTimeout(() => {
+      setLoading(true)
+      platformApi.semanticSearchFragments(query.trim(), category === '全部' ? undefined : category)
+        .then(results => { if (active) setSemanticResults(results.map(normalizeFragment)) })
+        .catch(error => { if (active) message.error(error instanceof Error ? error.message : '语义检索失败') })
+        .finally(() => { if (active) setLoading(false) })
+    }, 300)
+    return () => {
+      active = false
+      window.clearTimeout(timeout)
+    }
+  }, [category, mockMode, normalizeFragment, query, searchMode])
+
   const searched = useMemo(() => {
-    if (searchMode === 'semantic') return rankFragmentsSemantic(normalized, query)
+    if (searchMode === 'semantic') {
+      if (!mockMode && query.trim()) return semanticResults
+      return rankFragmentsSemantic(normalized, query)
+    }
     const keyword = query.trim().toLowerCase()
     return normalized.filter(record => !keyword || `${record.title} ${record.preview} ${record.tags.join(' ')} ${record.source}`.toLowerCase().includes(keyword))
-  }, [normalized, query, searchMode])
+  }, [mockMode, normalized, query, searchMode, semanticResults])
   const filtered = searched.filter(record => category === '全部' || record.category === category)
   const paged = paginate(filtered, page, pageSize)
 
@@ -54,6 +125,7 @@ export default function FragmentLibrary() {
 
   const openEditor = (record?: FragmentRecord, createNewVersion = false) => {
     setEditing(record || null)
+    setSelectedFile(null)
     form.setFieldsValue(record ? {
       ...record,
       tags: record.tags.join('，'),
@@ -73,6 +145,56 @@ export default function FragmentLibrary() {
     const shouldVersion = Boolean(editing && values.createNewVersion)
     const version = shouldVersion ? nextDocumentVersion(editing?.version) : editing?.version || 'v1.0'
     const now = new Date().toLocaleString('zh-CN', { hour12: false })
+    if (!mockMode) {
+      setLoading(true)
+      try {
+        let fileId: string | undefined
+        if (selectedFile) {
+          const fileRef = await createHttpBidApi().uploadFile(selectedFile, 'fragment')
+          fileId = fileRef.id
+        }
+        let result: Fragment
+        if (editing) {
+          result = await platformApi.updateFragment(editing.id, editing.apiVersion || 1, {
+            title: values.title.trim(),
+            category: values.category,
+            summary: values.preview.trim(),
+            content: (values.content || values.preview).trim(),
+            documentVersion: version,
+            tags,
+          })
+          if (shouldVersion) {
+            result = await platformApi.addFragmentVersion(editing.id, {
+              content: (values.content || values.preview).trim(),
+              fileId,
+              changeNote: values.changeNote || '更新片段版本',
+            })
+          }
+        } else {
+          result = await platformApi.createFragment({
+            title: values.title.trim(),
+            category: values.category,
+            summary: values.preview.trim(),
+            content: (values.content || values.preview).trim(),
+            sourceFileId: fileId,
+            documentVersion: version,
+            tags,
+          })
+        }
+        const normalizedResult = normalizeFragment(result)
+        setFragments(previous => editing ? previous.map(item => item.id === editing.id ? normalizedResult : item) : [normalizedResult, ...previous])
+        setEditorOpen(false)
+        setEditing(null)
+        setSelectedFile(null)
+        form.resetFields()
+        message.success(shouldVersion ? `片段已更新为 ${version}` : editing ? '片段已保存' : '片段已上传并完成索引')
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '片段保存失败')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
     const record: FragmentRecord = {
       ...editing,
       ...values,
@@ -102,7 +224,22 @@ export default function FragmentLibrary() {
     message.success(shouldVersion ? `片段已更新为 ${version}` : editing ? '片段已保存' : '片段已上传并完成索引')
   }
 
-  const referenceFragment = (record: FragmentRecord) => {
+  const referenceFragment = async (record: FragmentRecord) => {
+    const targetTask = bidTasks[0]
+    if (!targetTask) {
+      message.warning('请先创建投标任务，再引用文档片段')
+      return
+    }
+    if (!mockMode) {
+      try {
+        const response = await platformApi.addFragmentReference(record.id, { bidTaskId: targetTask.id })
+        setFragments(previous => previous.map(item => item.id === record.id ? { ...item, useCount: response.useCount } : item))
+        message.success(`已引用“${record.title}”到“${targetTask.projectName}”，引用记录已写入审计轨迹`)
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '片段引用失败')
+      }
+      return
+    }
     const reference = {
       id: `REF-${record.id}-${record.useCount + 1}`,
       projectName: '2026年深圳市政务云平台采购项目',
@@ -118,7 +255,15 @@ export default function FragmentLibrary() {
     message.success(`已引用“${record.title}”，引用记录已写入审计轨迹`)
   }
 
-  const deleteFragment = (record: FragmentRecord) => {
+  const deleteFragment = async (record: FragmentRecord) => {
+    if (!mockMode) {
+      try {
+        await platformApi.deleteFragment(record.id, '管理员从片段库页面删除')
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '片段删除失败')
+        throw error
+      }
+    }
     setFragments(previous => previous.filter(item => item.id !== record.id))
     message.success(`已删除“${record.title}”`)
   }
@@ -168,7 +313,7 @@ export default function FragmentLibrary() {
               <div className="mt-auto rounded-lg bg-[#F8FAFC] p-2.5 text-xs text-[#64748B]"><div className="flex justify-between gap-2"><span className="truncate">来源：{record.source}</span><Tag className="!m-0">{record.version}</Tag></div><div className="mt-2 flex items-center justify-between"><span className="flex items-center gap-1"><TrendingUp size={11} />引用 {record.useCount} 次</span><span className="flex items-center gap-1"><Clock size={11} />{record.updatedAt}</span></div></div>
               <div className="mt-3 flex flex-wrap items-center justify-end gap-1 border-t border-[#F1F5F9] pt-3">
                 <FilePreview file={{ name: record.title, version: record.version, source: record.source, updatedAt: record.updatedAt, content: record.content }} />
-                <Button type="link" size="small" icon={<Quote size={12} />} onClick={() => referenceFragment(record)}>引用</Button>
+                <Button type="link" size="small" icon={<Quote size={12} />} onClick={() => void referenceFragment(record)}>引用</Button>
                 <Button type="text" size="small" icon={<TrendingUp size={12} />} onClick={() => setReferenceRecord(record)}>引用记录</Button>
                 <Button type="text" size="small" icon={<History size={12} />} onClick={() => setHistoryRecord(record)}>版本</Button>
                 <PermissionGate permissions={permissions} require="library:write">
@@ -184,13 +329,15 @@ export default function FragmentLibrary() {
       {!paged.items.length && <div className="rounded-xl border border-[#E2E8F0] bg-white"><EmptyState title="未找到匹配片段" description="换一个检索描述或清除分类条件后再试。" action={<Button onClick={resetFilters}>清除筛选</Button>} /></div>}
       {filtered.length > 0 && <div className="mt-4 flex justify-end"><Pagination current={paged.page} pageSize={pageSize} total={filtered.length} showSizeChanger pageSizeOptions={[6, 9, 18]} showTotal={total => `共 ${total} 条`} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) }} /></div>}
 
-      <Modal title={editing ? '编辑文档片段' : '新增文档片段'} open={editorOpen} onCancel={() => { setEditorOpen(false); setEditing(null); form.resetFields() }} onOk={saveFragment} okText="保存并索引" cancelText="取消" width={720}>
+      <Modal title={editing ? '编辑文档片段' : '新增文档片段'} open={editorOpen} confirmLoading={loading} onCancel={() => { setEditorOpen(false); setEditing(null); setSelectedFile(null); form.resetFields() }} onOk={saveFragment} okText="保存并索引" cancelText="取消" width={720}>
         <Form form={form} layout="vertical" className="pt-3" requiredMark={false}>
           <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
             <Form.Item name="title" label="片段标题" rules={[{ required: true, message: '请输入片段标题' }]}><Input /></Form.Item>
             <Form.Item name="category" label="分类" rules={[{ required: true }]}><Select options={fragmentCategories.filter(value => value !== '全部').map(value => ({ value, label: value }))} /></Form.Item>
             <Form.Item name="source" label="来源" rules={[{ required: true, message: '请输入来源' }]}><Input placeholder="产品白皮书 / 手工录入" /></Form.Item>
-            <Form.Item name="fileName" label="源文件"><Input placeholder="可选：solution.docx" /></Form.Item>
+            <Form.Item label="源文件">
+              <div className="flex gap-2"><Input value={selectedFileName || ''} readOnly placeholder="可选：solution.docx" /><AppUpload compact accept=".pdf,.doc,.docx,.txt,.md" maxSizeMb={50} label="选择文件" onFiles={files => { if (files[0]) { setSelectedFile(files[0]); form.setFieldValue('fileName', files[0].name) } }} /></div>
+            </Form.Item>
           </div>
           <Form.Item name="tags" label="标签"><Input placeholder="使用逗号分隔，例如：云平台，安全，等保" /></Form.Item>
           <Form.Item name="preview" label="内容摘要" rules={[{ required: true, message: '请输入内容摘要' }]}><Input.TextArea rows={3} maxLength={240} showCount /></Form.Item>

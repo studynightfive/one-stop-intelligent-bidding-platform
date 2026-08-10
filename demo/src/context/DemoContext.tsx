@@ -11,9 +11,13 @@ import { evaluationTasks as initialEvaluationTasks, evalNotifications as initial
 import { loginSession, logoutSession, type LoginValues } from '../api/authApi'
 import { readAccessToken } from '../api/authStorage'
 import { shouldUseMocks } from '../api/runtime'
+import { platformApi, type User } from '../api/platformApi'
 
 type DemoContextValue = {
   loggedIn: boolean
+  authReady: boolean
+  currentUser: User | null
+  updateCurrentUser: (user: User) => void
   login: (values?: LoginValues) => Promise<void>
   logout: () => Promise<void>
   bidTasks: any[]
@@ -43,6 +47,26 @@ const DemoContext = createContext<DemoContextValue | null>(null)
 
 const STORAGE_KEY = 'bid-platform-demo-state-v2'
 const DEMO_PERMISSIONS = ['*', 'admin:read', 'admin:write', 'library:read', 'library:write', 'settings:write']
+const MOCK_USER: User = {
+  id: 'U001',
+  tenantId: 'demo-tenant',
+  name: '张明远',
+  email: 'zhangmy@zhilian-tech.com',
+  role: 'project_lead',
+  department: '投标部',
+  status: 'active',
+  projectCount: 3,
+  version: 1,
+  createdAt: '2026-08-01T09:00:00Z',
+  updatedAt: '2026-08-04T14:30:00Z',
+}
+
+const ROLE_PERMISSIONS: Record<User['role'], string[]> = {
+  admin: ['*'],
+  project_lead: ['projects:read', 'projects:write', 'bids:read', 'bids:write', 'bids:review', 'users:read', 'library:read', 'library:write'],
+  reviewer: ['projects:read', 'bids:read', 'bids:review', 'library:read'],
+  member: ['projects:read', 'bids:read', 'library:read'],
+}
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value))
@@ -74,6 +98,8 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
   const [loggedIn, setLoggedIn] = useState(() => (
     mockMode ? sessionStorage.getItem('bid-demo-logged-in') === 'true' : Boolean(readAccessToken())
   ))
+  const [authReady, setAuthReady] = useState(() => mockMode || !readAccessToken())
+  const [currentUser, setCurrentUser] = useState<User | null>(() => mockMode ? MOCK_USER : null)
   const [permissions, setPermissions] = useState<string[]>(DEMO_PERMISSIONS)
   const [bidTasks, setBidTasks] = useState<any[]>(stored?.bidTasks || clone(initialBidTasks))
   const [taskMaterials, setTaskMaterials] = useState<Record<string, any[]>>(stored?.taskMaterials || buildInitialMaterials())
@@ -95,11 +121,33 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     }))
   }, [bidTasks, taskMaterials, evaluationTasks, qualifications, fragments, users, appNotifications])
 
+  useEffect(() => {
+    if (mockMode || !readAccessToken()) return
+    let active = true
+    platformApi.getMe()
+      .then(user => {
+        if (!active) return
+        setCurrentUser(user)
+        setPermissions(ROLE_PERMISSIONS[user.role])
+        setLoggedIn(true)
+      })
+      .catch(() => {
+        if (!active) return
+        setCurrentUser(null)
+        setLoggedIn(false)
+      })
+      .finally(() => {
+        if (active) setAuthReady(true)
+      })
+    return () => { active = false }
+  }, [mockMode])
+
   const login = useCallback(async (values?: LoginValues) => {
     if (!mockMode) {
       if (!values) throw new Error('璇疯緭鍏ョ櫥褰曞嚟璇?')
       const session = await loginSession(values)
       setPermissions(session.permissions)
+      setCurrentUser(session.user)
     }
     sessionStorage.setItem('bid-demo-logged-in', 'true')
     setLoggedIn(true)
@@ -114,6 +162,7 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
       }
     }
     sessionStorage.removeItem('bid-demo-logged-in')
+    if (!mockMode) setCurrentUser(null)
     setLoggedIn(false)
   }, [mockMode])
 
@@ -180,6 +229,9 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<DemoContextValue>(() => ({
     loggedIn,
+    authReady,
+    currentUser,
+    updateCurrentUser: setCurrentUser,
     login,
     logout,
     bidTasks,
@@ -203,7 +255,7 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     markAllNotificationsRead,
     permissions,
     resetDemoData,
-  }), [loggedIn, login, logout, bidTasks, evaluationTasks, qualifications, fragments, users, appNotifications, getTaskMaterials, permissions])
+  }), [loggedIn, authReady, currentUser, login, logout, bidTasks, evaluationTasks, qualifications, fragments, users, appNotifications, getTaskMaterials, permissions])
 
   return <DemoContext.Provider value={value}>{children}</DemoContext.Provider>
 }

@@ -132,7 +132,10 @@ export class ApiClient {
     headers.set('Accept', options.responseType === 'blob' ? 'application/octet-stream' : 'application/json')
     headers.set('X-Request-ID', requestId)
     if (token) headers.set('Authorization', `Bearer ${token}`)
-    if (options.ifMatch !== undefined) headers.set('If-Match', String(options.ifMatch))
+    if (options.ifMatch !== undefined) {
+      const rawVersion = String(options.ifMatch).trim()
+      headers.set('If-Match', /^\d+$/.test(rawVersion) ? `"${rawVersion}"` : rawVersion)
+    }
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
     const isFormData = options.body instanceof FormData
     const isRawBody = options.bodyMode === 'raw'

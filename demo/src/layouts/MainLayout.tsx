@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Avatar, Badge, Button, Dropdown, Input, Layout, Modal, Segmented, Tooltip, message } from 'antd'
+import { Avatar, Badge, Button, Dropdown, Form, Input, Layout, Modal, Segmented, Tooltip, message } from 'antd'
 import {
   Bell, CheckCircle2, CheckSquare, ChevronRight,
   Menu, PenLine, Search, Zap,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { currentUser } from '../mock/data'
+import { currentUser as mockCurrentUser } from '../mock/data'
 import { useDemo } from '../context/DemoContext'
+import { platformApi, type Notification, type SearchResult } from '../api/platformApi'
+import { shouldUseMocks } from '../api/runtime'
 import { bidNavigation } from '../features/bids/navigation'
 import { adminNavigation } from '../features/admin/navigation'
 import { evaluationNavigation } from '../features/admin/evaluationBridge'
@@ -24,6 +26,8 @@ export default function MainLayout() {
   const location = useLocation()
   const {
     logout,
+    currentUser,
+    updateCurrentUser,
     bidTasks,
     evaluationTasks,
     resetDemoData,
@@ -31,10 +35,17 @@ export default function MainLayout() {
     markNotificationRead,
     markAllNotificationsRead,
   } = useDemo()
+  const mockMode = shouldUseMocks()
   const [collapsed, setCollapsed] = useState(false)
   const [mobile, setMobile] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [liveNotifications, setLiveNotifications] = useState<Notification[]>([])
+  const [liveSearchResults, setLiveSearchResults] = useState<SearchResult[]>([])
+  const [searching, setSearching] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileForm] = Form.useForm<{ name: string; phone?: string; department?: string }>()
 
   const mode: Mode = location.pathname.startsWith('/evaluation') ? 'evaluation' : 'bid'
   const navItems = mode === 'bid' ? bidNavItems : evalNavItems
@@ -50,7 +61,17 @@ export default function MainLayout() {
     return location.pathname.startsWith(item.key)
   })
 
-  const unreadCount = appNotifications.filter(item => !item.isRead).length
+  const notifications = mockMode ? appNotifications : liveNotifications
+  const unreadCount = notifications.filter(item => !item.isRead).length
+
+  useEffect(() => {
+    if (mockMode) return
+    let active = true
+    platformApi.listNotifications()
+      .then(page => { if (active) setLiveNotifications(page.data) })
+      .catch(error => { if (active) message.error(error instanceof Error ? error.message : '通知加载失败') })
+    return () => { active = false }
+  }, [mockMode])
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -63,7 +84,7 @@ export default function MainLayout() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const searchResults = useMemo(() => {
+  const localSearchResults = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     if (!keyword) return []
     const pages = [...bidNavItems, ...evalNavItems].map(item => ({ title: item.label, subtitle: '功能页面', path: item.key }))
@@ -75,6 +96,26 @@ export default function MainLayout() {
       .slice(0, 8)
   }, [search, bidTasks, evaluationTasks])
 
+  useEffect(() => {
+    if (mockMode || !search.trim()) return
+    let active = true
+    const timeout = window.setTimeout(() => {
+      setSearching(true)
+      platformApi.search(search.trim())
+        .then(results => { if (active) setLiveSearchResults(results) })
+        .catch(() => { if (active) setLiveSearchResults([]) })
+        .finally(() => { if (active) setSearching(false) })
+    }, 250)
+    return () => {
+      active = false
+      window.clearTimeout(timeout)
+    }
+  }, [mockMode, search])
+
+  const searchResults = mockMode
+    ? localSearchResults
+    : liveSearchResults.map(item => ({ title: item.title, subtitle: item.subtitle || item.type, path: item.route }))
+
   const goTo = (path: string) => {
     navigate(path)
     setSearchOpen(false)
@@ -84,21 +125,52 @@ export default function MainLayout() {
 
   const handleModeChange = (value: string) => goTo(value === 'bid' ? '/dashboard' : '/evaluation')
 
+  const openProfile = () => {
+    const user = currentUser
+    profileForm.setFieldsValue({ name: user?.name || mockCurrentUser.name, phone: user?.phone, department: user?.department })
+    setProfileOpen(true)
+  }
+
+  const saveProfile = async () => {
+    const values = await profileForm.validateFields()
+    setProfileSaving(true)
+    try {
+      if (mockMode) {
+        message.success('模拟个人资料已更新')
+      } else {
+        const updated = await platformApi.updateMe(values)
+        updateCurrentUser(updated)
+        message.success('个人资料已更新')
+      }
+      setProfileOpen(false)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '个人资料保存失败')
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
   const userMenu = {
     items: [
       { key: 'profile', label: '个人资料' },
       { key: 'settings', label: '账号设置' },
-      { key: 'reset', label: '重置演示数据' },
+      { key: 'reset', label: mockMode ? '重置演示数据' : '刷新页面数据' },
       { type: 'divider' as const },
       { key: 'logout', label: '退出登录', danger: true },
     ],
     onClick: ({ key }: { key: string }) => {
       if (key === 'logout') {
         void logout()
-        message.success('已退出演示账号')
+        message.success('已退出登录')
       } else if (key === 'settings') {
         goTo('/admin/settings')
+      } else if (key === 'profile') {
+        openProfile()
       } else if (key === 'reset') {
+        if (!mockMode) {
+          window.location.reload()
+          return
+        }
         Modal.confirm({
           title: '重置演示数据？',
           content: '将清除本浏览器中新增的任务、资质、片段和用户，恢复初始演示状态。',
@@ -110,31 +182,55 @@ export default function MainLayout() {
             message.success('演示数据已恢复初始状态')
           },
         })
-      } else {
-        message.info('Demo 当前使用项目负责人示例账号')
       }
     },
   }
 
+  const markOneNotificationRead = async (id: string) => {
+    if (mockMode) {
+      markNotificationRead(id)
+      return
+    }
+    try {
+      const updated = await platformApi.markNotificationRead(id)
+      setLiveNotifications(previous => previous.map(item => item.id === id ? updated : item))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '通知状态更新失败')
+    }
+  }
+
+  const markEveryNotificationRead = async () => {
+    if (mockMode) {
+      markAllNotificationsRead()
+      return
+    }
+    try {
+      await platformApi.markAllNotificationsRead()
+      setLiveNotifications(previous => previous.map(item => ({ ...item, isRead: true })))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '通知状态更新失败')
+    }
+  }
+
   const notificationMenu = {
     onClick: ({ key }: { key: string }) => {
-      if (key === 'mark-all') markAllNotificationsRead()
-      else markNotificationRead(key)
+      if (key === 'mark-all') void markEveryNotificationRead()
+      else void markOneNotificationRead(key)
     },
     items: [
-      ...appNotifications.slice(0, 6).map(item => ({
+      ...notifications.slice(0, 6).map(item => ({
         key: item.id,
         label: (
           <div className="py-1 max-w-xs">
             <div className="flex items-center gap-1.5 mb-0.5">
               <span className={`w-1.5 h-1.5 rounded-full ${item.isRead ? 'bg-[#CBD5E1]' : 'bg-[#DC2626]'}`} />
               <span className="text-xs font-medium text-[#1E293B]">{item.title}</span>
-              <span className={`text-xs px-1 rounded ${item.source === 'eval' ? 'bg-[#F5F3FF] text-[#7C3AED]' : 'bg-[#EFF6FF] text-[#2563EB]'}`}>
-                {item.source === 'eval' ? '评标' : '投标'}
+              <span className="rounded bg-[#EFF6FF] px-1 text-xs text-[#2563EB]">
+                {'source' in item ? (item.source === 'eval' ? '评标' : '投标') : item.type}
               </span>
             </div>
             <div className="text-xs text-[#64748B]">{item.content}</div>
-            <div className="text-xs text-[#94A3B8] mt-0.5">{item.time}</div>
+            <div className="text-xs text-[#94A3B8] mt-0.5">{'time' in item ? item.time : new Date(item.createdAt).toLocaleString('zh-CN', { hour12: false })}</div>
           </div>
         ),
       })),
@@ -209,8 +305,8 @@ export default function MainLayout() {
 
         {!collapsed && (
           <div className="absolute bottom-4 left-3 right-3 bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-3 text-xs text-[#92400E]">
-            <div className="font-medium mb-0.5">Demo 演示模式</div>
-            <div className="text-[#D97706]">操作会保存在当前浏览器</div>
+            <div className="font-medium mb-0.5">{mockMode ? 'Demo 模拟模式' : 'Demo 联调模式'}</div>
+            <div className="text-[#D97706]">{mockMode ? '操作会保存在当前浏览器' : '操作会写入本地服务'}</div>
           </div>
         )}
       </Sider>
@@ -252,10 +348,10 @@ export default function MainLayout() {
             </Dropdown>
             <Dropdown menu={userMenu} trigger={['click']}>
               <button type="button" className="flex items-center gap-2 cursor-pointer">
-                <Avatar size={28} style={{ background: '#2563EB', fontSize: 12 }}>{currentUser.avatar}</Avatar>
+                <Avatar size={28} style={{ background: '#2563EB', fontSize: 12 }}>{(currentUser?.name || mockCurrentUser.name).slice(0, 2)}</Avatar>
                 <span className="hidden md:block text-left">
-                  <span className="block text-xs font-medium text-[#1E293B] leading-tight">{currentUser.name}</span>
-                  <span className="block text-xs text-[#64748B] leading-tight">{currentUser.role}</span>
+                  <span className="block text-xs font-medium text-[#1E293B] leading-tight">{currentUser?.name || mockCurrentUser.name}</span>
+                  <span className="block text-xs text-[#64748B] leading-tight">{currentUser ? ({ admin: '管理员', project_lead: '项目负责人', member: '成员', reviewer: '审核人' }[currentUser.role]) : mockCurrentUser.role}</span>
                 </span>
               </button>
             </Dropdown>
@@ -272,11 +368,19 @@ export default function MainLayout() {
           prefix={<Search size={16} className="text-[#94A3B8]" />}
           placeholder="搜索页面、投标任务或评标任务"
           value={search}
-          onChange={event => setSearch(event.target.value)}
+          onChange={event => {
+            const value = event.target.value
+            setSearch(value)
+            if (!value.trim()) {
+              setLiveSearchResults([])
+              setSearching(false)
+            }
+          }}
         />
         <div className="mt-3 max-h-[360px] overflow-y-auto">
           {!search && <div className="py-8 text-center text-sm text-[#94A3B8]">输入关键词开始搜索</div>}
-          {search && searchResults.length === 0 && <div className="py-8 text-center text-sm text-[#94A3B8]">未找到匹配结果</div>}
+          {searching && <div className="py-8 text-center text-sm text-[#94A3B8]">正在搜索…</div>}
+          {search && !searching && searchResults.length === 0 && <div className="py-8 text-center text-sm text-[#94A3B8]">未找到匹配结果</div>}
           {searchResults.map(result => (
             <button
               key={result.path}
@@ -292,6 +396,14 @@ export default function MainLayout() {
             </button>
           ))}
         </div>
+      </Modal>
+
+      <Modal title="个人资料" open={profileOpen} onCancel={() => setProfileOpen(false)} onOk={() => void saveProfile()} confirmLoading={profileSaving} okText="保存" cancelText="取消">
+        <Form form={profileForm} layout="vertical" className="pt-3" requiredMark={false}>
+          <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}><Input /></Form.Item>
+          <Form.Item name="phone" label="联系电话"><Input placeholder="可选" /></Form.Item>
+          <Form.Item name="department" label="部门"><Input placeholder="可选" /></Form.Item>
+        </Form>
       </Modal>
     </Layout>
   )

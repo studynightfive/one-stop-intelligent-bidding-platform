@@ -1,4 +1,5 @@
 type RuntimeEnvironment = {
+  MODE?: string
   VITE_API_BASE_URL?: string
   VITE_USE_MOCKS?: string
 }
@@ -12,6 +13,8 @@ export function apiBaseUrl(): string {
 }
 
 export function shouldUseMocks(): boolean {
-  const value = String(environment().VITE_USE_MOCKS ?? 'false').toLowerCase()
+  const runtime = environment()
+  if (runtime.MODE === 'test') return true
+  const value = String(runtime.VITE_USE_MOCKS ?? 'false').toLowerCase()
   return value === 'true' || value === '1' || value === 'yes'
 }
