@@ -1186,7 +1186,7 @@ class BidService:
                 raise validation_error("材料匹配结果字段不合法")
             if material_id not in allowed_material_ids:
                 raise conflict("材料匹配结果超出原始任务范围", jobId=job_id, materialId=material_id)
-            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+            if isinstance(confidence, bool) or not isinstance(confidence, int | float) or not 0 <= confidence <= 1:
                 raise validation_error("matchConfidence 必须在 0 到 1 之间")
             material = self.store.get_material(material_id, tenant_id=tenant_id)
             if material.task_id != task_id:

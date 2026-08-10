@@ -572,7 +572,7 @@ class FragmentService:
                 fragment is None
                 or hit.fragment_id in seen
                 or isinstance(score, bool)
-                or not isinstance(score, (int, float))
+                or not isinstance(score, int | float)
                 or not 0 <= score <= 1
                 or not reason
             ):

@@ -63,7 +63,7 @@ def build_xlsx(rows: Iterable[Iterable[Any]], *, sheet_name: str) -> bytes:
             reference = f"{_column_name(column_number)}{row_number}"
             if isinstance(value, bool):
                 cells.append(f'<c r="{reference}" t="b"><v>{int(value)}</v></c>')
-            elif isinstance(value, (int, float)):
+            elif isinstance(value, int | float):
                 cells.append(f'<c r="{reference}"><v>{value}</v></c>')
             else:
                 text = escape(str(value))
