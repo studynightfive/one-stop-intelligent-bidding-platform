@@ -225,7 +225,21 @@ export default function FragmentLibrary() {
   }
 
   const referenceFragment = async (record: FragmentRecord) => {
-    const targetTask = bidTasks[0]
+    let targetTask = bidTasks[0]
+    if (!mockMode) {
+      try {
+        const page = await createHttpBidApi().listBidTasks({
+          page: 1,
+          pageSize: 1,
+          sortBy: 'updatedAt',
+          sortOrder: 'desc',
+        })
+        targetTask = page.data[0]
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '投标任务加载失败')
+        return
+      }
+    }
     if (!targetTask) {
       message.warning('请先创建投标任务，再引用文档片段')
       return
