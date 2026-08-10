@@ -137,3 +137,72 @@ export function toEvaluationTaskSummary(task: EvaluationTask): EvaluationTaskSum
     riskCount: task.riskCount,
   }
 }
+// ── Portal API ──────────────────────────────────────────────────────
+type PortalContext = components['schemas']['PortalContext']
+type PortalMaterial = components['schemas']['PortalMaterial']
+type PortalDraft = components['schemas']['PortalDraft']
+type PortalPriceRound = components['schemas']['PortalPriceRound']
+type PortalActivity = components['schemas']['PortalActivity']
+type SupplementNotice = components['schemas']['SupplementNotice']
+type SubmissionReceipt = components['schemas']['SubmissionReceipt']
+type QuoteSubmission = components['schemas']['QuoteSubmission']
+
+/** Fetch supplier portal context (evaluation + supplier identity + submission summary). */
+export function fetchPortalContext() {
+  return apiClient.get<PortalContext>('/portal/me')
+}
+
+/** Fetch the list of required/optional materials for this supplier. */
+export function fetchPortalMaterials() {
+  return apiClient.get<PortalMaterial[]>('/portal/materials')
+}
+
+/** Bind an uploaded file to a portal material row. */
+export function uploadPortalMaterialFile(materialId: string, fileId: string) {
+  return apiClient.put<PortalMaterial>(`/portal/materials/${materialId}/file`, { fileId })
+}
+
+/** Remove a previously uploaded file from a material row. */
+export function deletePortalMaterialFile(materialId: string) {
+  return apiClient.delete<PortalMaterial>(`/portal/materials/${materialId}/file`)
+}
+
+/** Save portal draft (note + optional quote draft). */
+export function savePortalDraft(payload: { note?: string; quoteDraft?: number }) {
+  return apiClient.put<PortalDraft>('/portal/draft', payload)
+}
+
+/** Finalise and submit all materials. Returns a receipt. */
+export function submitPortalMaterials(idempotencyKey: string) {
+  return apiClient.post<SubmissionReceipt>('/portal/submit', undefined, { idempotencyKey })
+}
+
+/** Download the submission receipt as a blob. */
+export function fetchPortalReceipt() {
+  return apiClient.get<Blob>('/portal/receipt', { responseType: 'blob' })
+}
+
+/** Fetch supplement notices for the current portal supplier. */
+export function fetchPortalNotices() {
+  return apiClient.get<SupplementNotice[]>('/portal/notices')
+}
+
+/** Respond to a supplement notice by binding replacement files. */
+export function respondPortalNotice(noticeId: string, fileBindings: { materialId: string; fileId: string }[]) {
+  return apiClient.post<SupplementNotice>(`/portal/notices/${noticeId}/respond`, { fileBindings })
+}
+
+/** Fetch price rounds visible to the portal supplier. */
+export function fetchPortalPriceRounds() {
+  return apiClient.get<PortalPriceRound[]>('/portal/price-rounds')
+}
+
+/** Submit a quote for a specific price round. */
+export function submitPortalQuote(roundId: string, amount: number) {
+  return apiClient.post<QuoteSubmission>(`/portal/price-rounds/${roundId}/quotes`, { amount })
+}
+
+/** Fetch portal audit-trail / activity log. */
+export function fetchPortalActivity() {
+  return apiClient.get<PortalActivity[]>('/portal/activity')
+}
