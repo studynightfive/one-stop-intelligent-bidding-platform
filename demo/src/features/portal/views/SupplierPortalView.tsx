@@ -13,6 +13,7 @@ import { shouldUseMocks } from '../../../api/runtime'
 import { createHttpBidApi } from '../../bids/adapters/httpBidApi'
 import { PORTAL_TEST_IDS } from '../constants'
 import { requiredMaterialTemplates, supplierMaterialRecords, priceRounds, supplementNotifications, closedEvaluationExample } from '../../../mock/evaluationData'
+import { downloadDemoFile } from '../../../utils/demoActions'
 
 const PORTAL_TOKEN_PREFIX = 'bid-platform-portal-token:'
 
@@ -312,12 +313,11 @@ export default function SupplierPortal() {
       if (!portalToken) { message.error('门户会话已失效，请刷新后重试'); return }
       try { const blob = await fetchPortalReceipt(portalToken); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `提交回执-${selectedSupplier}.pdf`; a.click(); URL.revokeObjectURL(url); message.success('提交回执已下载'); return } catch (reason) { message.error(readableError(reason, '回执下载失败，请重试')); return }
     }
-    const { downloadDemoFile } = await import('../../../utils/demoActions')
     downloadDemoFile(`提交回执-${selectedSupplier}.txt`, ['智标云供应商材料提交回执', `供应商：${currentSupplier.name}`, '项目：2026年深圳市政务云平台采购项目', `提交材料：${submittedCount}/${totalCount}`, `生成时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`, '说明：本文件为Demo生成的回执。'].join('\n'))
     message.success('提交回执已下载')
   }
 
-  if (loading) return <div className="min-h-[600px] flex items-center justify-center"><Spin size="large" tip="加载供应商门户..." /></div>
+  if (loading) return <div role="status" aria-live="polite" className="min-h-[600px] flex flex-col items-center justify-center gap-3"><Spin size="large" /><span className="text-sm text-[#64748B]">加载供应商门户...</span></div>
 
   if (error && mode === 'active') return <div className="min-h-[600px] flex items-center justify-center p-6"><Alert type="error" message="加载失败" description={error} showIcon className="max-w-lg" /></div>
 
