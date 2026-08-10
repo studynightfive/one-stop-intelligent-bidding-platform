@@ -1,14 +1,15 @@
 import type { BidApiPort } from './bidApiPort'
 import { shouldUseBidMocks } from './bidEnv'
+import { createHttpBidApi } from './httpBidApi'
 import { createMockBidApi } from './mockBidApi'
 
 /**
  * M1 Bid API 入口。
  * - 默认关闭 Mock（与仓库 VITE_USE_MOCKS=false 一致）
  * - 仅当 VITE_USE_MOCKS=true 时自动挂载 Mock
- * - 真实后端：由调用方 setBidApi(M3 HTTP Client / 生成 SDK 封装)，本文件不手写 fetch
+ * - 默认复用全局认证、刷新、请求 ID 与错误映射能力访问真实 API
  */
-let bidApi: BidApiPort | null = shouldUseBidMocks() ? createMockBidApi() : null
+let bidApi: BidApiPort | null = shouldUseBidMocks() ? createMockBidApi() : createHttpBidApi()
 
 export function getBidApi(): BidApiPort {
   if (!bidApi) {

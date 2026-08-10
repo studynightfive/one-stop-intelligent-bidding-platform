@@ -1,5 +1,7 @@
 import type { BidTaskViewModel } from '../types'
 import type {
+  CreateBidReviewRequest,
+  CreateBidTaskRequest,
   CreateUploadSessionRequest,
   DocumentDiff,
   DocumentVersion,
@@ -20,6 +22,10 @@ import type {
  */
 export type BidApiPort = {
   listBidTasks(query: ListBidTasksQuery): Promise<PageResult<BidTaskViewModel>>
+  getBidTask(taskId: string): Promise<BidTaskViewModel>
+  createBidTask(body: CreateBidTaskRequest): Promise<BidTaskViewModel>
+  parseBidTask(taskId: string, idempotencyKey: string): Promise<JobRef>
+  startBidReview(taskId: string, body: CreateBidReviewRequest, idempotencyKey: string): Promise<JobRef>
 
   createUploadSession(body: CreateUploadSessionRequest): Promise<UploadSession>
   getUploadSession(uploadId: string): Promise<UploadSession>
@@ -34,6 +40,7 @@ export type BidApiPort = {
   ): Promise<FileRef>
 
   generateDocuments(taskId: string, body: GenerateBidDocumentRequest, idempotencyKey: string): Promise<JobRef>
+  getJob(jobId: string): Promise<JobRef>
   listDocumentVersions(
     taskId: string,
     query?: { page?: number; pageSize?: number; sortBy?: string; sortOrder?: 'asc' | 'desc' },
