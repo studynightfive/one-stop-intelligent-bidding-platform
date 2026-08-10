@@ -9,7 +9,7 @@ export default function Login({ onLogin }: { onLogin: (values: LoginValues) => v
   const mockMode = shouldUseMocks()
   const demoAccount = mockMode
     ? { email: mockCurrentUser.email, password: 'demo123456' }
-    : { email: 'admin@bid-platform.local', password: 'DemoAdmin123!' }
+    : { email: 'admin@bid-platform.dev', password: 'DemoAdmin123!' }
   const [submitting, setSubmitting] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
   const [forgotForm] = Form.useForm<{ email: string }>()
