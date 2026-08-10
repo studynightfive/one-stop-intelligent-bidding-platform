@@ -7,13 +7,7 @@ import SupplierPortalView from '../views/SupplierPortalView'
 import { PORTAL_TEST_IDS } from '../constants'
 import { vi } from 'vitest'
 
-vi.mock('../evaluations/api', () => ({
-  fetchPortalContext: vi.fn().mockRejectedValue(new Error('no backend')),
-  fetchPortalMaterials: vi.fn().mockRejectedValue(new Error('no backend')),
-  fetchPortalPriceRounds: vi.fn().mockRejectedValue(new Error('no backend')),
-  fetchPortalNotices: vi.fn().mockRejectedValue(new Error('no backend')),
-  fetchPortalActivity: vi.fn().mockRejectedValue(new Error('no backend')),
-}))
+vi.mock('../../../api/runtime', () => ({ shouldUseMocks: () => true }))
 
 describe('M2 supplier portal', () => {
   it('renders the active supplier submission portal with E2E selectors', async () => {
@@ -31,7 +25,7 @@ describe('M2 supplier portal', () => {
     expect(screen.getByTestId(PORTAL_TEST_IDS.portalSubmit)).toBeTruthy()
   })
 
-  it('shows demo fallback badge when API is unavailable', async () => {
+  it('shows the explicit browser demo badge', async () => {
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <DemoProvider>
@@ -42,7 +36,7 @@ describe('M2 supplier portal', () => {
     await waitFor(() => {
       expect(screen.getByTestId(PORTAL_TEST_IDS.portal)).toBeTruthy()
     })
-    expect(screen.getByText('Demo 降级模式')).toBeTruthy()
+    expect(screen.getByText('Demo 模式')).toBeTruthy()
   })
 
   it('renders E2E selectors for quote submission', async () => {
