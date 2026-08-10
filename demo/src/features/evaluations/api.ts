@@ -1,18 +1,30 @@
-import { apiClient } from '../../api/client'
+import { ApiClient, apiClient } from '../../api/client'
 import type { components } from '../../api/generated/schema'
 import type { EvaluationTaskSummary } from './types'
 
-type EvaluationTask = components['schemas']['EvaluationTask']
-type EvaluationTaskDetail = components['schemas']['EvaluationTaskDetail']
+export type EvaluationTask = components['schemas']['EvaluationTask']
+export type EvaluationTaskDetail = components['schemas']['EvaluationTaskDetail']
 type EvaluationStats = components['schemas']['EvaluationStats']
 type EvaluationMaterial = components['schemas']['EvaluationMaterial']
 type ScoringCriterion = components['schemas']['ScoringCriterion']
 type ReviewSettings = components['schemas']['ReviewSettings']
 type ValidationResult = components['schemas']['ValidationResult']
 type SupplierInvitationInput = components['schemas']['SupplierInvitationInput']
-type SupplierInviteSummary = components['schemas']['SupplierInviteSummary']
 type CreateEvaluationDraftRequest = components['schemas']['CreateEvaluationDraftRequest']
 type UpdateEvaluationRequest = components['schemas']['UpdateEvaluationRequest']
+export type Supplier = components['schemas']['Supplier']
+export type SupplierSubmission = components['schemas']['SupplierSubmission']
+export type SupplierInviteSummary = components['schemas']['SupplierInviteSummary']
+export type SupplementNotice = components['schemas']['SupplementNotice']
+export type PriceRound = components['schemas']['PriceRound']
+export type PriceComparison = components['schemas']['PriceComparison']
+export type MaterialCheckResult = components['schemas']['MaterialCheckResult']
+export type RiskFinding = components['schemas']['RiskFinding']
+export type ScoreItem = components['schemas']['ScoreItem']
+export type EvaluationRanking = components['schemas']['EvaluationRanking']
+export type EvaluationReport = components['schemas']['EvaluationReport']
+export type AuditEvent = components['schemas']['AuditEvent']
+export type JobRef = components['schemas']['JobRef']
 
 export type EvaluationMaterialInput = Omit<EvaluationMaterial, 'evaluationId'>
 export type ScoringCriterionInput = Omit<ScoringCriterion, 'evaluationId'>
@@ -122,6 +134,114 @@ export function publishEvaluation(evaluationId: string, idempotencyKey: string) 
   )
 }
 
+export function cancelEvaluation(evaluationId: string, reason: string) {
+  return apiClient.post<EvaluationTask>(`/evaluations/${evaluationId}/cancel`, { reason })
+}
+
+export function fetchEvaluationSuppliers(evaluationId: string) {
+  return apiClient.get<Supplier[]>(`/evaluations/${evaluationId}/suppliers`, { query: { page: 1, pageSize: 100 } })
+}
+
+export function fetchSupplierSubmissions(evaluationId: string, supplierId: string) {
+  return apiClient.get<SupplierSubmission[]>(`/evaluations/${evaluationId}/suppliers/${supplierId}/submissions`)
+}
+
+export function fetchSupplierInvites(evaluationId: string) {
+  return apiClient.get<SupplierInviteSummary[]>(`/evaluations/${evaluationId}/supplier-invites`)
+}
+
+export function rotateSupplierInvite(evaluationId: string, supplierId: string, reason: string) {
+  return apiClient.post<SupplierInviteSummary>(`/evaluations/${evaluationId}/supplier-invites/${supplierId}/rotate`, { reason })
+}
+
+export function revokeSupplierInvite(evaluationId: string, supplierId: string, reason: string) {
+  return apiClient.post<SupplierInviteSummary>(`/evaluations/${evaluationId}/supplier-invites/${supplierId}/revoke`, { reason })
+}
+
+export function createSupplementNotice(evaluationId: string, payload: components['schemas']['CreateSupplementNoticeRequest']) {
+  return apiClient.post<SupplementNotice>(`/evaluations/${evaluationId}/supplement-notices`, payload)
+}
+
+export function fetchSupplementNotices(evaluationId: string) {
+  return apiClient.get<SupplementNotice[]>(`/evaluations/${evaluationId}/supplement-notices`, { query: { page: 1, pageSize: 100 } })
+}
+
+export function createPriceRound(evaluationId: string, payload: components['schemas']['CreatePriceRoundRequest']) {
+  return apiClient.post<PriceRound>(`/evaluations/${evaluationId}/price-rounds`, payload)
+}
+
+export function fetchPriceRounds(evaluationId: string) {
+  return apiClient.get<PriceRound[]>(`/evaluations/${evaluationId}/price-rounds`)
+}
+
+export function closePriceRound(evaluationId: string, roundId: string) {
+  return apiClient.post<PriceRound>(`/evaluations/${evaluationId}/price-rounds/${roundId}/close`)
+}
+
+export function fetchPriceComparison(evaluationId: string) {
+  return apiClient.get<PriceComparison>(`/evaluations/${evaluationId}/price-comparison`)
+}
+
+export function startMaterialCheck(evaluationId: string) {
+  return apiClient.post<JobRef>(`/evaluations/${evaluationId}/material-checks`)
+}
+
+export function fetchLatestMaterialCheck(evaluationId: string) {
+  return apiClient.get<MaterialCheckResult>(`/evaluations/${evaluationId}/material-checks/latest`)
+}
+
+export function startRiskCheck(evaluationId: string) {
+  return apiClient.post<JobRef>(`/evaluations/${evaluationId}/risk-checks`)
+}
+
+export function fetchRisks(evaluationId: string) {
+  return apiClient.get<RiskFinding[]>(`/evaluations/${evaluationId}/risks`)
+}
+
+export function decideRisk(evaluationId: string, riskId: string, decision: 'passed' | 'rejected', reason: string) {
+  return apiClient.post<RiskFinding>(`/evaluations/${evaluationId}/risks/${riskId}/decision`, { decision, reason })
+}
+
+export function startAiScoring(evaluationId: string) {
+  return apiClient.post<JobRef>(`/evaluations/${evaluationId}/ai-scoring`)
+}
+
+export function fetchScores(evaluationId: string, supplierId?: string, category?: string) {
+  return apiClient.get<ScoreItem[]>(`/evaluations/${evaluationId}/scores`, { query: { supplierId, category } })
+}
+
+export function updateScore(evaluationId: string, score: ScoreItem, humanScore: string, adjustmentReason: string) {
+  return apiClient.patch<ScoreItem>(`/evaluations/${evaluationId}/scores/${score.supplierId}/${score.criterionId}`, { humanScore, adjustmentReason }, { ifMatch: score.version })
+}
+
+export function confirmScores(evaluationId: string, supplierId?: string, comment?: string) {
+  return apiClient.post<{ confirmed: boolean }>(`/evaluations/${evaluationId}/scores/confirm`, { supplierId, comment })
+}
+
+export function fetchRanking(evaluationId: string) {
+  return apiClient.get<EvaluationRanking>(`/evaluations/${evaluationId}/ranking`)
+}
+
+export function createEvaluationReport(evaluationId: string, formats: Array<'docx' | 'pdf'>) {
+  return apiClient.post<JobRef>(`/evaluations/${evaluationId}/reports`, { formats })
+}
+
+export function fetchEvaluationReports(evaluationId: string) {
+  return apiClient.get<EvaluationReport[]>(`/evaluations/${evaluationId}/reports`)
+}
+
+export function downloadEvaluationReport(evaluationId: string, reportId: string) {
+  return apiClient.get<Blob>(`/evaluations/${evaluationId}/reports/${reportId}/download`, { responseType: 'blob' })
+}
+
+export function closeEvaluation(evaluationId: string, resultSummary: string, idempotencyKey: string) {
+  return apiClient.post<EvaluationTask>(`/evaluations/${evaluationId}/close`, { resultSummary }, { idempotencyKey })
+}
+
+export function fetchEvaluationAuditEvents(evaluationId: string) {
+  return apiClient.get<AuditEvent[]>(`/evaluations/${evaluationId}/audit-events`, { query: { page: 1, pageSize: 100 } })
+}
+
 export function toEvaluationTaskSummary(task: EvaluationTask): EvaluationTaskSummary {
   return {
     id: task.id,
@@ -143,66 +263,95 @@ type PortalMaterial = components['schemas']['PortalMaterial']
 type PortalDraft = components['schemas']['PortalDraft']
 type PortalPriceRound = components['schemas']['PortalPriceRound']
 type PortalActivity = components['schemas']['PortalActivity']
-type SupplementNotice = components['schemas']['SupplementNotice']
 type SubmissionReceipt = components['schemas']['SubmissionReceipt']
 type QuoteSubmission = components['schemas']['QuoteSubmission']
+export type PortalSession = components['schemas']['PortalSession']
+
+/** Create a client whose Bearer token is isolated from the internal admin session. */
+export function createPortalApiClient(portalAccessToken: string) {
+  return new ApiClient({ auth: { getAccessToken: () => portalAccessToken } })
+}
+
+/** Exchange a one-time supplier invitation code for a short-lived portal session. */
+export function exchangePortalSession(inviteCode: string) {
+  const publicClient = new ApiClient()
+  return publicClient.post<PortalSession>('/portal/session/exchange', { inviteCode })
+}
+
+/** Refresh a portal session through the HttpOnly refresh cookie. */
+export function refreshPortalSession() {
+  const publicClient = new ApiClient()
+  return publicClient.post<PortalSession>('/portal/session/refresh')
+}
+
+function portalClient(portalAccessToken: string) {
+  return createPortalApiClient(portalAccessToken)
+}
 
 /** Fetch supplier portal context (evaluation + supplier identity + submission summary). */
-export function fetchPortalContext() {
-  return apiClient.get<PortalContext>('/portal/me')
+export function fetchPortalContext(portalAccessToken: string) {
+  return portalClient(portalAccessToken).get<PortalContext>('/portal/me')
 }
 
 /** Fetch the list of required/optional materials for this supplier. */
-export function fetchPortalMaterials() {
-  return apiClient.get<PortalMaterial[]>('/portal/materials')
+export function fetchPortalMaterials(portalAccessToken: string) {
+  return portalClient(portalAccessToken).get<PortalMaterial[]>('/portal/materials')
 }
 
 /** Bind an uploaded file to a portal material row. */
-export function uploadPortalMaterialFile(materialId: string, fileId: string) {
-  return apiClient.put<PortalMaterial>(`/portal/materials/${materialId}/file`, { fileId })
+export function uploadPortalMaterialFile(portalAccessToken: string, materialId: string, fileId: string) {
+  return portalClient(portalAccessToken).put<PortalMaterial>(`/portal/materials/${materialId}/file`, { fileId })
 }
 
 /** Remove a previously uploaded file from a material row. */
-export function deletePortalMaterialFile(materialId: string) {
-  return apiClient.delete<PortalMaterial>(`/portal/materials/${materialId}/file`)
+export function deletePortalMaterialFile(portalAccessToken: string, materialId: string) {
+  return portalClient(portalAccessToken).delete<PortalMaterial>(`/portal/materials/${materialId}/file`)
 }
 
 /** Save portal draft (note + optional quote draft). */
-export function savePortalDraft(payload: { note?: string; quoteDraft?: number }) {
-  return apiClient.put<PortalDraft>('/portal/draft', payload)
+export function savePortalDraft(portalAccessToken: string, payload: { note?: string; quoteDraft?: number }) {
+  return portalClient(portalAccessToken).put<PortalDraft>('/portal/draft', payload)
 }
 
 /** Finalise and submit all materials. Returns a receipt. */
-export function submitPortalMaterials(idempotencyKey: string) {
-  return apiClient.post<SubmissionReceipt>('/portal/submit', undefined, { idempotencyKey })
+export function submitPortalMaterials(portalAccessToken: string, idempotencyKey: string) {
+  return portalClient(portalAccessToken).post<SubmissionReceipt>(
+    '/portal/submit',
+    { confirmed: true },
+    { idempotencyKey },
+  )
 }
 
 /** Download the submission receipt as a blob. */
-export function fetchPortalReceipt() {
-  return apiClient.get<Blob>('/portal/receipt', { responseType: 'blob' })
+export function fetchPortalReceipt(portalAccessToken: string) {
+  return portalClient(portalAccessToken).get<Blob>('/portal/receipt', { responseType: 'blob' })
 }
 
 /** Fetch supplement notices for the current portal supplier. */
-export function fetchPortalNotices() {
-  return apiClient.get<SupplementNotice[]>('/portal/notices')
+export function fetchPortalNotices(portalAccessToken: string) {
+  return portalClient(portalAccessToken).get<SupplementNotice[]>('/portal/notices')
 }
 
 /** Respond to a supplement notice by binding replacement files. */
-export function respondPortalNotice(noticeId: string, fileBindings: { materialId: string; fileId: string }[]) {
-  return apiClient.post<SupplementNotice>(`/portal/notices/${noticeId}/respond`, { fileBindings })
+export function respondPortalNotice(portalAccessToken: string, noticeId: string, fileBindings: { materialId: string; fileId: string }[]) {
+  return portalClient(portalAccessToken).post<SupplementNotice>(`/portal/notices/${noticeId}/respond`, { fileBindings })
 }
 
 /** Fetch price rounds visible to the portal supplier. */
-export function fetchPortalPriceRounds() {
-  return apiClient.get<PortalPriceRound[]>('/portal/price-rounds')
+export function fetchPortalPriceRounds(portalAccessToken: string) {
+  return portalClient(portalAccessToken).get<PortalPriceRound[]>('/portal/price-rounds')
 }
 
 /** Submit a quote for a specific price round. */
-export function submitPortalQuote(roundId: string, amount: number) {
-  return apiClient.post<QuoteSubmission>(`/portal/price-rounds/${roundId}/quotes`, { amount })
+export function submitPortalQuote(portalAccessToken: string, roundId: string, amount: number, idempotencyKey: string) {
+  return portalClient(portalAccessToken).post<QuoteSubmission>(
+    `/portal/price-rounds/${roundId}/quotes`,
+    { amount, currency: 'CNY' },
+    { idempotencyKey },
+  )
 }
 
 /** Fetch portal audit-trail / activity log. */
-export function fetchPortalActivity() {
-  return apiClient.get<PortalActivity[]>('/portal/activity')
+export function fetchPortalActivity(portalAccessToken: string) {
+  return portalClient(portalAccessToken).get<PortalActivity[]>('/portal/activity')
 }

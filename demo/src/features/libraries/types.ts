@@ -1,4 +1,4 @@
-export type QualificationStatus = 'valid' | 'expiring' | 'expired' | 'permanent'
+export type QualificationStatus = 'valid' | 'expiring' | 'expired' | 'revoked' | 'permanent'
 
 export interface LibraryVersion {
   version: string
@@ -22,6 +22,8 @@ export interface QualificationRecord {
   versions?: LibraryVersion[]
   createdAt?: string
   updatedAt?: string
+  apiVersion?: number
+  fileId?: string
 }
 
 export interface FragmentReference {
@@ -48,4 +50,6 @@ export interface FragmentRecord {
   references?: FragmentReference[]
   matchScore?: number
   matchReason?: string
+  apiVersion?: number
+  fileId?: string
 }
