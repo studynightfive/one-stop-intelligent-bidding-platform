@@ -155,7 +155,7 @@ export function rotateSupplierInvite(evaluationId: string, supplierId: string, r
 }
 
 export function revokeSupplierInvite(evaluationId: string, supplierId: string, reason: string) {
-  return apiClient.post<SupplierInviteSummary>(`/evaluations/${evaluationId}/supplier-invites/${supplierId}/revoke`, { reason })
+  return apiClient.post<{ revoked: true }>(`/evaluations/${evaluationId}/supplier-invites/${supplierId}/revoke`, { reason })
 }
 
 export function createSupplementNotice(evaluationId: string, payload: components['schemas']['CreateSupplementNoticeRequest']) {
