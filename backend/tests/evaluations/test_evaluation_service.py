@@ -130,6 +130,20 @@ async def test_create_validate_publish_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_publish_idempotency_is_scoped_to_evaluation() -> None:
+    container = build_m6_container()
+    actor = _actor()
+    first_id, _, _, _ = await _configured_evaluation(container, actor)
+    second_id, _, _, _ = await _configured_evaluation(container, actor)
+
+    first = await container.evaluations.publish(actor, first_id, idempotency_key="shared-key")
+    second = await container.evaluations.publish(actor, second_id, idempotency_key="shared-key")
+
+    assert first["evaluation"]["id"] == first_id
+    assert second["evaluation"]["id"] == second_id
+
+
+@pytest.mark.asyncio
 async def test_from_bid_snapshot_port_only() -> None:
     container = build_m6_container()
     assert container.ports is not None
@@ -215,6 +229,39 @@ async def test_portal_isolation_and_submit_idempotent() -> None:
     # B 不能看到 A 的提交
     subs_b = container.store.list_submissions(evaluation_id=eid, supplier_id=principal_b.supplier_id)
     assert subs_b == []
+    await container.portal.put_material_file(principal_b, materials[0]["id"], file_id)
+    receipt_b = await container.portal.submit(principal_b, confirmed=True, idempotency_key="sub-1")
+    assert receipt_b["supplierId"] == principal_b.supplier_id
+    assert receipt_b["supplierId"] != receipt1["supplierId"]
+
+    now = datetime.now(UTC)
+    price_round = await container.pricing.create_round(
+        actor,
+        eid,
+        {
+            "title": "首轮报价",
+            "opensAt": (now - timedelta(minutes=1)).isoformat(),
+            "deadline": (now + timedelta(hours=1)).isoformat(),
+            "eligibleSupplierIds": [principal_a.supplier_id, principal_b.supplier_id],
+            "rankingVisibleToSupplier": False,
+        },
+    )
+    quote_a = await container.pricing.submit_quote(
+        principal_a,
+        price_round["id"],
+        amount="4900000.00",
+        currency="CNY",
+        idempotency_key="shared-quote",
+    )
+    quote_b = await container.pricing.submit_quote(
+        principal_b,
+        price_round["id"],
+        amount="4800000.00",
+        currency="CNY",
+        idempotency_key="shared-quote",
+    )
+    assert quote_a["supplierId"] == principal_a.supplier_id
+    assert quote_b["supplierId"] == principal_b.supplier_id
 
 
 @pytest.mark.asyncio
@@ -252,5 +299,8 @@ async def test_score_adjust_requires_reason_and_audit() -> None:
     ranking = await container.scoring.ranking(actor, eid)
     assert ranking["rows"]
     await container.scoring.confirm_scores(reviewer, eid, supplier_id=None, comment="确认")
+    with pytest.raises(DomainError) as exc:
+        await container.evaluations.close(actor, eid, "  ", idempotency_key="close-empty")
+    assert exc.value.code == "VALIDATION_ERROR"
     closed = await container.evaluations.close(actor, eid, "评标完成", idempotency_key="close-1")
     assert closed["status"] == "closed"
