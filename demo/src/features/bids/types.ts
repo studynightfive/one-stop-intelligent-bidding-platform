@@ -24,9 +24,12 @@ export type BidTaskViewModel = {
   currentStep: number
   progress: number
   assignee: string
+  assigneeId?: string
   materialTotal: number
   materialHave: number
   materialMissing: number
+  linkedEvaluationId?: string
+  version?: number
   createdAt?: string
   tags?: string[]
 }
