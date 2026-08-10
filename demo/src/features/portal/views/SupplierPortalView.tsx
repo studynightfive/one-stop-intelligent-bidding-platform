@@ -63,8 +63,6 @@ export default function SupplierPortal() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError('')
     async function loadFromApi() {
       if (isDemo) throw new Error('demo')
       const ctx = await fetchPortalContext()
@@ -133,7 +131,7 @@ export default function SupplierPortal() {
   const uploadMaterial = async (record: any, file: File) => {
     const materialId = materials.find((m: any) => m.name === record.name)?.id
     if (!isDemo && materialId) {
-      try { await uploadPortalMaterialFile(materialId, 'demo-file-id'); const mats = await fetchPortalMaterials(); setMaterials(mats); message.success(`${record.name} 上传成功`); return false } catch {}
+      try { await uploadPortalMaterialFile(materialId, 'demo-file-id'); const mats = await fetchPortalMaterials(); setMaterials(mats); message.success(`${record.name} 上传成功`); return false } catch { /* fall through to demo */ }
     }
     const existing = findSubmission(record.name)
     const next: MaterialRecord = { id: existing?.id || `SMR-${Date.now()}-${record.id}`, supplierId: selectedSupplier, supplierName: currentSupplier.name, material: record.name, fileName: file.name, fileSize: `${Math.max(file.size / 1024 / 1024, 0.1).toFixed(1)}MB`, submitTime: new Date().toLocaleString('zh-CN', { hour12: false }), status: 'submitted', round: 1 }
@@ -146,7 +144,7 @@ export default function SupplierPortal() {
   // Batch upload
   const batchUpload = async (file: File) => {
     if (!isDemo) {
-      try { const missing = materials.filter((m: any) => m.required && m.status !== 'submitted'); await Promise.all(missing.map((m: any) => uploadPortalMaterialFile(m.id, 'demo-file-id'))); const mats = await fetchPortalMaterials(); setMaterials(mats); message.success(missing.length ? `批量上传完成，已匹配 ${missing.length} 项材料` : '所有必交材料均已提交'); return false } catch {}
+      try { const missing = materials.filter((m: any) => m.required && m.status !== 'submitted'); await Promise.all(missing.map((m: any) => uploadPortalMaterialFile(m.id, 'demo-file-id'))); const mats = await fetchPortalMaterials(); setMaterials(mats); message.success(missing.length ? `批量上传完成，已匹配 ${missing.length} 项材料` : '所有必交材料均已提交'); return false } catch { /* fall through to demo */ }
     }
     const missing = requiredMaterialDefs.filter(item => findSubmission(item.name)?.status !== 'submitted')
     const now = new Date().toLocaleString('zh-CN', { hour12: false })
@@ -172,7 +170,7 @@ export default function SupplierPortal() {
     if (!isDemo) {
       const openRound = priceRoundData.find((r: any) => r.status === 'active')
       if (openRound) {
-        try { await submitPortalQuote(String(openRound.round), value); const prs = await fetchPortalPriceRounds(); setPriceRoundData(prs.map((pr: any) => ({ round: pr.roundNumber, title: pr.title, startTime: dayjs(pr.opensAt).format('YYYY-MM-DD HH:mm'), deadline: dayjs(pr.deadline).format('YYYY-MM-DD HH:mm'), status: pr.status === 'closed' ? 'completed' : pr.status === 'open' ? 'active' : 'scheduled', suppliers: pr.myQuote ? [{ supplierId: portalCtx?.supplier?.id, supplierName: portalCtx?.supplier?.name ?? '', price: pr.myQuote.amount, submitTime: dayjs(pr.myQuote.submittedAt).format('YYYY-MM-DD HH:mm:ss'), isLowest: pr.myRank === 1 }] : [] }))); setQuoteValue(''); message.success('本轮报价已提交并留痕'); return } catch {}
+        try { await submitPortalQuote(String(openRound.round), value); const prs = await fetchPortalPriceRounds(); setPriceRoundData(prs.map((pr: any) => ({ round: pr.roundNumber, title: pr.title, startTime: dayjs(pr.opensAt).format('YYYY-MM-DD HH:mm'), deadline: dayjs(pr.deadline).format('YYYY-MM-DD HH:mm'), status: pr.status === 'closed' ? 'completed' : pr.status === 'open' ? 'active' : 'scheduled', suppliers: pr.myQuote ? [{ supplierId: portalCtx?.supplier?.id, supplierName: portalCtx?.supplier?.name ?? '', price: pr.myQuote.amount, submitTime: dayjs(pr.myQuote.submittedAt).format('YYYY-MM-DD HH:mm:ss'), isLowest: pr.myRank === 1 }] : [] }))); setQuoteValue(''); message.success('本轮报价已提交并留痕'); return } catch { /* fall through to demo */ }
       }
     }
     setSubmittedQuotes(prev => ({ ...prev, [selectedSupplier]: formatted }))
@@ -183,7 +181,7 @@ export default function SupplierPortal() {
   // Save draft
   const savePortalDraftAction = async () => {
     if (!isDemo) {
-      try { const payload: any = {}; if (quoteValue) payload.quoteDraft = Number(quoteValue.replace(/,/g, '')); const result = await savePortalDraft(payload); setLastDraftSaved(dayjs(result.savedAt).format('YYYY-MM-DD HH:mm:ss')); message.success('当前材料与报价草稿已保存到服务端'); return } catch {}
+      try { const payload: any = {}; if (quoteValue) payload.quoteDraft = Number(quoteValue.replace(/,/g, '')); const result = await savePortalDraft(payload); setLastDraftSaved(dayjs(result.savedAt).format('YYYY-MM-DD HH:mm:ss')); message.success('当前材料与报价草稿已保存到服务端'); return } catch { /* fall through to demo */ }
     }
     const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
     localStorage.setItem(`supplier-portal-draft-${selectedSupplier}`, JSON.stringify({ supplierId: selectedSupplier, records: records.filter(item => item.supplierId === selectedSupplier), quoteValue, savedAt }))
@@ -209,7 +207,7 @@ export default function SupplierPortal() {
   // Download receipt
   const downloadReceipt = async () => {
     if (!isDemo) {
-      try { const blob = await fetchPortalReceipt(); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `提交回执-${selectedSupplier}.json`; a.click(); URL.revokeObjectURL(url); message.success('提交回执已下载'); return } catch {}
+      try { const blob = await fetchPortalReceipt(); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `提交回执-${selectedSupplier}.json`; a.click(); URL.revokeObjectURL(url); message.success('提交回执已下载'); return } catch { /* fall through to demo */ }
     }
     const { downloadDemoFile } = await import('../../../utils/demoActions')
     downloadDemoFile(`提交回执-${selectedSupplier}.txt`, ['智标云供应商材料提交回执', `供应商：${currentSupplier.name}`, '项目：2026年深圳市政务云平台采购项目', `提交材料：${submittedCount}/${totalCount}`, `生成时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`, '说明：本文件为Demo生成的回执。'].join('\n'))
