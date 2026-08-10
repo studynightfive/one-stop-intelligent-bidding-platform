@@ -39,7 +39,7 @@ interface BidTask {
 interface BidDocument {
   id: string;
   type: string;
-  file: FileRef;
+  latestFile: FileRef;
 }
 
 interface Evaluation {
@@ -343,10 +343,10 @@ test.describe('real business flows @contract', () => {
       path: `/api/v1/bid-tasks/${task.id}/documents`,
     });
     const technical = documents.find((item) => item.type === 'technical');
-    expect(technical).toBeDefined();
-    expect(technical?.file.mimeType).toContain('wordprocessingml.document');
+    if (!technical) throw new Error('technical document was not persisted');
+    expect(technical.latestFile.mimeType).toContain('wordprocessingml.document');
     const download = await client.raw({
-      path: `/api/v1/bid-tasks/${task.id}/documents/${technical?.id}/download`,
+      path: `/api/v1/bid-tasks/${task.id}/documents/${technical.id}/download`,
     });
     const docx = await download.body();
     expect(docx.subarray(0, 2).toString()).toBe('PK');
