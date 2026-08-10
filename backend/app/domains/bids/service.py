@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import copy
+import logging
+import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from functools import wraps
+from hashlib import sha256
 from typing import Any, cast
+
+import httpx
 
 from app.domains.bids.access import (
     require_create,
@@ -86,7 +92,10 @@ from app.domains.bids.validation import (
     validate_update_bid_task,
     validate_update_material,
 )
+from app.domains.documents.generator import EmbeddedImage, build_bid_docx
 from app.domains.documents.service import DocumentService
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -117,7 +126,7 @@ def _idempotency_scope(*, action: str, tenant_id: str, actor_id: str, aggregate_
 
 
 def _job_dict(job: JobRefSnapshot) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "id": job.id,
         "type": job.type,
         "status": job.status,
@@ -125,6 +134,11 @@ def _job_dict(job: JobRefSnapshot) -> dict[str, Any]:
         "currentStep": job.current_step or "queued",
         "createdAt": job.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
     }
+    if job.result is not None:
+        data["result"] = job.result
+    if job.error is not None:
+        data["error"] = job.error
+    return data
 
 
 def _require_clean_file(file_obj: Any) -> None:
@@ -137,6 +151,116 @@ def _require_clean_file(file_obj: Any) -> None:
     digest = str(file_obj.sha256 or "")
     if len(digest) != 64 or digest == "0" * 64 or any(char not in "0123456789abcdefABCDEF" for char in digest):
         raise file_rejected("文件 SHA-256 摘要无效", fileId=file_obj.id)
+
+
+def _generation_context(task: BidTaskEntity) -> dict[str, Any]:
+    requirements = task.requirements
+    project_info: dict[str, Any] = {
+        "projectName": task.project_name,
+        "tenderNo": task.tender_no,
+        "tenderEntity": task.tender_entity,
+        "deadline": task.deadline.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "description": task.description or "",
+        "tags": list(task.tags),
+    }
+    if requirements is not None:
+        project_info.update(requirements.project_info)
+    requirement_context = {
+        "qualificationRequirements": list(requirements.qualification_requirements) if requirements else [],
+        "technicalRequirements": list(requirements.technical_requirements) if requirements else [],
+        "scoringItems": copy.deepcopy(requirements.scoring_items) if requirements else [],
+        "disqualificationItems": copy.deepcopy(requirements.disqualification_items) if requirements else [],
+    }
+    library = [
+        {
+            "id": material.id,
+            "name": material.name,
+            "category": material.category,
+            "requirement": material.requirement,
+            "required": material.required,
+            "source": material.source,
+            "sourceId": material.source_id,
+            "fileId": material.file_id,
+            "status": material.status,
+            "matchConfidence": material.match_confidence,
+        }
+        for material in sorted(task.materials, key=lambda item: (item.sort_order, item.id))
+    ]
+    return {"projectInfo": project_info, "requirements": requirement_context, "library": library}
+
+
+def _safe_document_name(value: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", value).strip(" ._")
+    return (cleaned or "投标文件")[:120]
+
+
+def _text_paragraph(text: str, *, index: int = 1) -> dict[str, Any]:
+    return {"index": index, "text": text, "evidence": []}
+
+
+def _fallback_document_sections(
+    task: BidTaskEntity, doc_type: str, worker_output: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    requirements = task.requirements
+    if doc_type == "qualification":
+        qualification_requirements = requirements.qualification_requirements if requirements else []
+        materials = [material.name for material in task.materials if material.category == "qualification"]
+        return [
+            {
+                "key": "qualification",
+                "heading": "资格审查响应",
+                "headingLevel": 1,
+                "paragraphs": [
+                    _text_paragraph("资格要求：" + ("；".join(qualification_requirements) or "以招标文件为准")),
+                    _text_paragraph("已准备材料：" + ("；".join(materials) or "暂无已绑定资格材料"), index=2),
+                ],
+                "images": [],
+            }
+        ]
+    if doc_type == "commercial":
+        scoring_items = requirements.scoring_items if requirements else []
+        scoring_text = "；".join(
+            f"{item.get('name', '评分项')}（{item.get('score', '-')}分）：{item.get('basis', '')}"
+            for item in scoring_items
+        )
+        return [
+            {
+                "key": "commercial",
+                "heading": "商务响应",
+                "headingLevel": 1,
+                "paragraphs": [
+                    _text_paragraph(f"项目编号：{task.tender_no}；招标人：{task.tender_entity}。"),
+                    _text_paragraph("评分与商务关注项：" + (scoring_text or "以招标文件为准"), index=2),
+                ],
+                "images": [],
+            }
+        ]
+
+    technical = worker_output.get("technicalDocument")
+    if isinstance(technical, Mapping) and isinstance(technical.get("sections"), list):
+        return [dict(section) for section in technical["sections"] if isinstance(section, Mapping)]
+    outline = worker_output.get("outline")
+    if isinstance(outline, list) and outline:
+        return [
+            {
+                "key": f"outline-{index}",
+                "heading": str(item.get("section") or f"技术方案 {index}"),
+                "headingLevel": int(item.get("headingLevel") or 1),
+                "paragraphs": [_text_paragraph("本章节已生成结构大纲，正文内容需在技术文档模式下逐段生成。")],
+                "images": [],
+            }
+            for index, item in enumerate(outline, start=1)
+            if isinstance(item, Mapping)
+        ]
+    return [
+        {
+            "key": "technical",
+            "heading": "技术方案",
+            "headingLevel": 1,
+            "paragraphs": [_text_paragraph("技术方案生成结果为空，请重新发起逐段生成任务。")],
+            "images": [],
+        }
+    ]
 
 
 def _bind_tender_file(task: BidTaskEntity, file_obj: Any) -> None:
@@ -1632,6 +1756,202 @@ class BidService:
         return response
 
     @_serialized_job_result
+    async def apply_generated_document_result(
+        self,
+        *,
+        tenant_id: str,
+        task_id: str,
+        job_id: str,
+        worker_result: Mapping[str, Any],
+        actor_id: str,
+        actor_name: str,
+    ) -> list[dict[str, Any]]:
+        """Assemble an eager M7 result into real DOCX versions for the demo flow."""
+
+        cached = self.store.get_job_result(job_id, tenant_id=tenant_id, task_id=task_id, outcome="succeeded")
+        if cached is not None:
+            return cast(list[dict[str, Any]], cached)
+        self.store.assert_job(
+            job_id,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            action=JOB_TYPE_DOCUMENT_GENERATE,
+        )
+        self.store.assert_latest_job(
+            job_id,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            action=JOB_TYPE_DOCUMENT_GENERATE,
+        )
+        job_input = self.store.get_job_input(
+            job_id,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            action=JOB_TYPE_DOCUMENT_GENERATE,
+        )
+        if actor_id != job_input.get("actorId") or actor_name != job_input.get("actorName"):
+            raise conflict("文档结果执行人和原始任务不匹配", jobId=job_id)
+        if str(worker_result.get("status") or "") != "succeeded":
+            raise conflict("Worker 未成功完成，不能装配文档", jobId=job_id)
+        worker_job_id = str(worker_result.get("jobId") or job_id)
+        if worker_job_id != job_id:
+            raise conflict("Worker 结果与原始任务不匹配", jobId=job_id, workerJobId=worker_job_id)
+        worker_output = worker_result.get("output")
+        if not isinstance(worker_output, Mapping):
+            raise validation_error("Worker 文档结果缺少 output 对象")
+        requested_technical = job_input.get("technicalDocument")
+        if requested_technical and not isinstance(worker_output.get("technicalDocument"), Mapping):
+            raise validation_error("逐段技术文档结果缺失，未创建占位 DOCX")
+
+        task = self.store.get_task(task_id, tenant_id=tenant_id)
+        if task.status != "pending_output":
+            raise conflict("文档结果已过期或任务状态不匹配", currentStatus=task.status, jobId=job_id)
+        embedded_images = await self._load_reference_images(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            technical_document=requested_technical,
+        )
+        requested_sections = [str(item) for item in (job_input.get("sections") or [])]
+        document_types = ["merged"] if job_input.get("mode") == "merged" else requested_sections
+        template_name = "标准投标模板"
+        technical_output = worker_output.get("technicalDocument")
+        if isinstance(technical_output, Mapping):
+            template_name = str(technical_output.get("templateName") or template_name)
+        elif isinstance(requested_technical, Mapping):
+            template_name = str(requested_technical.get("templateName") or template_name)
+
+        generated_files: list[tuple[str, str, bytes, str]] = []
+        labels = {"qualification": "资格标", "commercial": "商务标", "technical": "技术标", "merged": "合并标书"}
+        for doc_type in document_types:
+            section_types = requested_sections if doc_type == "merged" else [doc_type]
+            document_sections: list[dict[str, Any]] = []
+            for section_type in section_types:
+                document_sections.extend(_fallback_document_sections(task, section_type, worker_output))
+            built = build_bid_docx(
+                title=f"{task.project_name} · {labels.get(doc_type, doc_type)}",
+                template_name=template_name,
+                sections=document_sections,
+                images=embedded_images,
+                include_watermark=bool(job_input.get("includeWatermark")),
+            )
+            suffix = f"；缺失图片 {', '.join(built.missing_image_ids)}" if built.missing_image_ids else ""
+            generated_files.append(
+                (
+                    doc_type,
+                    f"{_safe_document_name(task.project_name)}-{doc_type}.docx",
+                    built.content,
+                    f"AI 逐段生成；嵌入图片 {built.embedded_image_count} 张{suffix}",
+                )
+            )
+
+        for doc_type, file_name, content, change_summary in generated_files:
+            file_id = new_id()
+            self.documents.append_version(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                doc_type=doc_type,
+                new_id_fn=new_id,
+                file_id=file_id,
+                file_name=file_name,
+                size_bytes=len(content),
+                sha256=sha256(content).hexdigest(),
+                content=content,
+                change_summary=change_summary,
+                created_by_id=actor_id,
+                created_by_name=actor_name,
+            )
+
+        assert_transition(task.status, "completed")
+        task.status = "completed"
+        task.failed_stage = None
+        task.current_step = step_for("completed")
+        task.progress_percent = progress_for("completed")
+        task.version += 1
+        task.updated_at = _now()
+        self.store.save_task(task)
+        response = self.documents.list_by_task(tenant_id=tenant_id, task_id=task_id)
+        self.store.remember_job_result(
+            job_id,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            outcome="succeeded",
+            value=response,
+        )
+        await self._append_system_audit(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            job_id=job_id,
+            action="bid_document.ai_result_assembled",
+            summary=f"AI 逐段结果已装配为 {len(generated_files)} 份 DOCX",
+        )
+        await self.notifications.notify(
+            NotificationInput(
+                tenant_id=tenant_id,
+                title="投标文档已生成",
+                content=f"{task.project_name} 的 AI 投标文档已生成并可下载",
+                user_id=task.assignee_id,
+                resource_type="bid_task",
+                resource_id=task_id,
+            )
+        )
+        return response
+
+    async def _load_reference_images(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        technical_document: Any,
+    ) -> dict[str, EmbeddedImage]:
+        if not isinstance(technical_document, Mapping):
+            return {}
+        raw_images = technical_document.get("referenceImages")
+        if not isinstance(raw_images, list) or not raw_images:
+            return {}
+        loaded: dict[str, EmbeddedImage] = {}
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            for raw_image in raw_images:
+                if not isinstance(raw_image, Mapping):
+                    continue
+                file_id = str(raw_image.get("fileId") or "").strip()
+                if not file_id or file_id in loaded:
+                    continue
+                try:
+                    file_obj = await self.files.assert_accessible(
+                        tenant_id=tenant_id,
+                        file_id=file_id,
+                        actor_id=actor_id,
+                        purpose="bidIllustration",
+                    )
+                    _require_clean_file(file_obj)
+                    if file_obj.mime_type not in {"image/png", "image/jpeg"}:
+                        raise ValueError(f"unsupported image MIME type: {file_obj.mime_type}")
+                    if file_obj.size_bytes > 20 * 1024 * 1024:
+                        raise ValueError("reference image exceeds 20 MiB")
+                    download_url = file_obj.download_url or await self.files.get_download_url(
+                        tenant_id=tenant_id,
+                        file_id=file_id,
+                        expires_minutes=15,
+                    )
+                    if not download_url or not download_url.startswith(("http://", "https://")):
+                        raise ValueError("reference image has no trusted download URL")
+                    response = await client.get(download_url)
+                    response.raise_for_status()
+                    content = response.content
+                    if len(content) != file_obj.size_bytes:
+                        raise ValueError("reference image size does not match metadata")
+                    if sha256(content).hexdigest().lower() != file_obj.sha256.lower():
+                        raise ValueError("reference image digest does not match metadata")
+                    loaded[file_id] = EmbeddedImage(
+                        file_id=file_id,
+                        content=content,
+                        mime_type=file_obj.mime_type,
+                    )
+                except Exception:
+                    logger.warning("unable to embed bid illustration %s", file_id, exc_info=True)
+        return loaded
+
+    @_serialized_job_result
     async def apply_document_rollback_result(
         self,
         *,
@@ -2261,6 +2581,7 @@ class BidService:
             )
         _require_retry_stage(task, "pending_output")
         cleaned = validate_document_generate(payload)
+        generation_context = _generation_context(task)
         latest_review = self.store.latest_review_for_task(task_id, tenant_id=actor.tenant_id)
         if latest_review is None or latest_review.status != "succeeded":
             raise conflict("审核尚未成功完成，不能生成投标文档", currentStatus=task.status)
@@ -2296,6 +2617,8 @@ class BidService:
                         "templateMode": cleaned["templateMode"],
                         "documentTemplateId": cleaned["documentTemplateId"],
                         "includeWatermark": cleaned["includeWatermark"],
+                        "technicalDocument": cleaned["technicalDocument"],
+                        **generation_context,
                     },
                 ),
                 created_by=actor.user_id,
@@ -2316,11 +2639,30 @@ class BidService:
                 "templateMode": cleaned["templateMode"],
                 "documentTemplateId": cleaned["documentTemplateId"],
                 "includeWatermark": cleaned["includeWatermark"],
+                "technicalDocument": cleaned["technicalDocument"],
                 "actorId": actor.user_id,
                 "actorName": actor.name,
             },
         )
         response = _job_dict(job)
+        if job.status == "succeeded" and isinstance(job.result, Mapping):
+            await self.apply_generated_document_result(
+                tenant_id=actor.tenant_id,
+                task_id=task_id,
+                job_id=job.id,
+                worker_result=job.result,
+                actor_id=actor.user_id,
+                actor_name=actor.name,
+            )
+        elif job.status == "failed":
+            message = str((job.error or {}).get("message") or "文档生成 Worker 执行失败")
+            await self.apply_job_failure(
+                tenant_id=actor.tenant_id,
+                task_id=task_id,
+                job_id=job.id,
+                failed_stage="pending_output",
+                message=message,
+            )
         self.store.remember_idempotency(scoped_key, response)
         await self._append_audit(actor, task_id, "bid_document.generate_enqueued", f"发起文档生成 Job {job.id}")
         return response
