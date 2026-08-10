@@ -1,0 +1,21 @@
+﻿{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@pages/*": ["pages/*"],
+      "@specs/*": ["specs/*"],
+      "@helpers/*": ["helpers/*"]
+    }
+  },
+  "include": ["pages/**/*", "specs/**/*", "helpers/**/*", "*.ts", "*.config.ts"]
+}

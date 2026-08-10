@@ -1,0 +1,23 @@
+﻿{
+  "name": "bid-platform-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "M7 跨端 Playwright E2E（投标/评标/Portal）。",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report",
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.49.1",
+    "@types/node": "22.10.5",
+    "typescript": "5.9.3",
+    "eslint": "9.17.0",
+    "@typescript-eslint/parser": "8.18.2",
+    "@typescript-eslint/eslint-plugin": "8.18.2"
+  }
+}
