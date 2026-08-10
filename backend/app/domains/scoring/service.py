@@ -184,16 +184,17 @@ class ScoringService:
     async def start_ai_scoring(self, actor: AuthPrincipal, evaluation_id: str) -> dict[str, Any]:
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_reviewer(actor, entity)
-        if entity.status in {"collecting", "pending"}:
-            assert_evaluation_transition(entity.status, "ai_review" if entity.status == "pending" else "pending")
-            # collecting -> pending -> ai_review 简化：直接进入 ai_review（测试可先手动推进）
-        if entity.status == "pending":
-            assert_evaluation_transition("pending", "ai_review")
-            entity.status = "ai_review"
-            entity.current_step = evaluation_step_for("ai_review")
-            entity.progress_percent = evaluation_progress_for("ai_review")
-            entity.updated_at = _now()
-            self.store.save_evaluation(entity)
+        if entity.status not in {"collecting", "pending"}:
+            raise conflict("当前状态不可发起 AI 评分", currentStatus=entity.status)
+        if entity.status == "collecting":
+            assert_evaluation_transition("collecting", "pending")
+            entity.status = "pending"
+        assert_evaluation_transition("pending", "ai_review")
+        entity.status = "ai_review"
+        entity.current_step = evaluation_step_for("ai_review")
+        entity.progress_percent = evaluation_progress_for("ai_review")
+        entity.updated_at = _now()
+        self.store.save_evaluation(entity)
         job = await self.jobs.enqueue(
             tenant_id=actor.tenant_id,
             job_type="evaluation.ai_scoring",
