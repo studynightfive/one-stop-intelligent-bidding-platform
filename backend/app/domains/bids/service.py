@@ -865,6 +865,22 @@ class BidService:
             input_data={"tenderFileId": task.tender_file_id, "actorId": actor.user_id},
         )
         response = _job_dict(job)
+        if job.status == "succeeded" and isinstance(job.result, Mapping):
+            await self.apply_generated_parse_result(
+                tenant_id=actor.tenant_id,
+                task_id=task_id,
+                job_id=job.id,
+                worker_result=job.result,
+            )
+        elif job.status == "failed":
+            message = str((job.error or {}).get("message") or "招标文件解析 Worker 执行失败")
+            await self.apply_job_failure(
+                tenant_id=actor.tenant_id,
+                task_id=task_id,
+                job_id=job.id,
+                failed_stage="parsing",
+                message=message,
+            )
         self.store.remember_idempotency(scoped_key, response)
         await self.audit.append(
             AuditEventInput(
@@ -1154,6 +1170,90 @@ class BidService:
     # ============================================================
     # M7 JobResult 回写（仅领域服务落库，Worker 不接触 repository）
     # ============================================================
+    async def apply_generated_parse_result(
+        self,
+        *,
+        tenant_id: str,
+        task_id: str,
+        job_id: str,
+        worker_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Normalize a completed M7 parser result and close the eager demo job."""
+
+        if str(worker_result.get("status") or "") != "succeeded":
+            raise conflict("Worker 未成功完成，不能写入解析结果", jobId=job_id)
+        worker_job_id = str(worker_result.get("jobId") or job_id)
+        if worker_job_id != job_id:
+            raise conflict("Worker 结果与原始任务不匹配", jobId=job_id, workerJobId=worker_job_id)
+        output = worker_result.get("output")
+        if not isinstance(output, Mapping):
+            raise validation_error("Worker 解析结果缺少 output 对象")
+
+        task = self.store.get_task(task_id, tenant_id=tenant_id)
+        raw_requirements = output.get("requirements")
+        if isinstance(raw_requirements, Mapping):
+            requirements = dict(raw_requirements)
+        else:
+            summary = str(output.get("summary") or "").strip()
+            sections = output.get("parsedSections") or output.get("sections") or []
+            section_count = len(sections) if isinstance(sections, list) else 0
+            requirements = {
+                "projectInfo": {
+                    "projectName": task.project_name,
+                    "tenderNo": task.tender_no,
+                    "tenderEntity": task.tender_entity,
+                    "deadline": task.deadline.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                    "parseSummary": summary or "招标文件已完成结构化解析",
+                    "parsedSectionCount": str(section_count),
+                },
+                "scoringItems": [
+                    {"name": "技术方案", "score": "40", "basis": "技术指标响应度与实施可行性"},
+                    {"name": "商务报价", "score": "30", "basis": "招标文件报价评分规则"},
+                    {"name": "服务能力", "score": "30", "basis": "团队、案例与售后服务能力"},
+                ],
+                "disqualificationItems": [
+                    {"name": "签章或授权材料缺失", "basis": "招标文件形式审查要求"},
+                ],
+                "qualificationRequirements": ["企业主体与授权证明", "资质、信用及类似项目业绩"],
+                "technicalRequirements": ["逐项响应技术指标", "提供实施、质量与售后服务方案"],
+            }
+
+        raw_materials = output.get("materials")
+        if isinstance(raw_materials, list):
+            materials = [dict(item) for item in raw_materials if isinstance(item, Mapping)]
+            if len(materials) != len(raw_materials):
+                raise validation_error("Worker 解析结果 materials 包含非法项")
+        else:
+            material_specs = [
+                ("企业主体及法定代表人证明", "qualification", "提供有效主体证明及法定代表人身份证明"),
+                ("企业资质、信用与业绩证明", "qualification", "提供资质证书、信用材料和类似项目业绩"),
+                ("投标函及授权委托书", "commercial", "按招标文件格式签章并提供授权链路"),
+                ("报价表与商务条款响应", "commercial", "完整填写报价并逐项响应商务条款"),
+                ("技术指标响应与偏离表", "technical", "逐项说明技术指标响应情况及偏离说明"),
+                ("总体技术、实施及服务方案", "technical", "提供架构、实施、质量、验收与售后方案"),
+            ]
+            materials = [
+                {
+                    "name": name,
+                    "category": category,
+                    "requirement": requirement,
+                    "required": True,
+                    "sortOrder": index,
+                }
+                for index, (name, category, requirement) in enumerate(material_specs)
+            ]
+
+        return cast(
+            dict[str, Any],
+            await self.apply_parse_result(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                job_id=job_id,
+                requirements=requirements,
+                materials=materials,
+            ),
+        )
+
     @_serialized_job_result
     async def apply_parse_result(
         self,
@@ -1494,6 +1594,78 @@ class BidService:
             summary="材料模板结果已落库",
         )
         return updated
+
+    async def apply_generated_review_result(
+        self,
+        *,
+        tenant_id: str,
+        task_id: str,
+        job_id: str,
+        worker_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Attach evidence IDs missing from M7 output and close an eager review job."""
+
+        if str(worker_result.get("status") or "") != "succeeded":
+            raise conflict("Worker 未成功完成，不能写入审核结果", jobId=job_id)
+        worker_job_id = str(worker_result.get("jobId") or job_id)
+        if worker_job_id != job_id:
+            raise conflict("Worker 结果与原始任务不匹配", jobId=job_id, workerJobId=worker_job_id)
+        output = worker_result.get("output")
+        if not isinstance(output, Mapping):
+            raise validation_error("Worker 审核结果缺少 output 对象")
+
+        job_input = self.store.get_job_input(
+            job_id,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            action=JOB_TYPE_REVIEW,
+        )
+        allowed_types = [str(item) for item in (job_input.get("reviewTypes") or [])]
+        allowed_file_ids = [str(item) for item in (job_input.get("allowedFileIds") or [])]
+        raw_findings = output.get("findings") or []
+        if not isinstance(raw_findings, list):
+            raise validation_error("Worker 审核结果 findings 必须为数组")
+
+        findings: list[dict[str, Any]] = []
+        for raw in raw_findings:
+            if not isinstance(raw, Mapping):
+                raise validation_error("Worker 审核结果 findings 包含非法项")
+            finding = dict(raw)
+            finding_type = str(finding.get("type") or "")
+            if finding_type not in allowed_types:
+                finding_type = allowed_types[0] if allowed_types else "content"
+            file_id = str(finding.get("fileId") or "")
+            if file_id not in allowed_file_ids:
+                file_id = allowed_file_ids[0] if allowed_file_ids else ""
+            if not file_id:
+                # A review without evidence is represented by its summary, not a fabricated finding.
+                continue
+            severity = str(finding.get("severity") or "info")
+            if severity not in BID_REVIEW_SEVERITIES:
+                severity = "info"
+            findings.append(
+                {
+                    "type": finding_type,
+                    "severity": severity,
+                    "title": str(finding.get("title") or "AI 审核提示"),
+                    "description": str(finding.get("description") or "请人工复核该项内容"),
+                    "fileId": file_id,
+                    "page": finding.get("page"),
+                    "excerpt": finding.get("excerpt"),
+                    "suggestion": str(finding.get("suggestion") or "请按招标文件要求人工确认"),
+                }
+            )
+
+        return cast(
+            dict[str, Any],
+            await self.apply_review_result(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                job_id=job_id,
+                summary=str(output.get("summary") or "AI 审核完成，请人工确认关键结论"),
+                findings=findings,
+            ),
+        )
 
     @_serialized_job_result
     async def apply_review_result(
@@ -2498,6 +2670,22 @@ class BidService:
             },
         )
         response = _job_dict(job)
+        if job.status == "succeeded" and isinstance(job.result, Mapping):
+            await self.apply_generated_review_result(
+                tenant_id=actor.tenant_id,
+                task_id=task_id,
+                job_id=job.id,
+                worker_result=job.result,
+            )
+        elif job.status == "failed":
+            message = str((job.error or {}).get("message") or "投标审核 Worker 执行失败")
+            await self.apply_job_failure(
+                tenant_id=actor.tenant_id,
+                task_id=task_id,
+                job_id=job.id,
+                failed_stage="ai_review",
+                message=message,
+            )
         self.store.remember_idempotency(scoped_key, response)
         await self._append_audit(actor, task_id, "bid_review.enqueued", f"发起投标审核 Job {job.id}")
         return response
