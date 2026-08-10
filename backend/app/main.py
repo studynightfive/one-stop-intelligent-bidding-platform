@@ -12,6 +12,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
+from app.core.dependencies import AuthenticatedUser, DBSession
+from app.core.errors.handlers import register_exception_handlers
+from app.domains.evaluations.container import M6Container, build_m6_container_with_m4
+from app.domains.evaluations.ports import AuthPrincipal, RecordingPorts
+from app.domains.evaluations.router import auth_principal_from_context, get_actor, get_container
+from app.domains.evaluations.store import EvaluationStore
+from app.models_registry import register_models
 
 
 def _contract_path() -> Path:
@@ -33,7 +40,25 @@ def _load_contract() -> dict[str, Any]:
     return contract
 
 
+def _configure_m6_dependencies(app: FastAPI) -> None:
+    """Bridge M6 to M4 authentication and shared platform services."""
+    store = EvaluationStore()
+    bid_snapshot = RecordingPorts()
+
+    async def provide_container(db: DBSession) -> M6Container:
+        return build_m6_container_with_m4(db, bid_snapshot=bid_snapshot, store=store)
+
+    async def provide_actor(current_user: AuthenticatedUser) -> AuthPrincipal:
+        return auth_principal_from_context(current_user)
+
+    app.state.m6_store = store
+    app.state.m6_bid_snapshot = bid_snapshot
+    app.dependency_overrides[get_container] = provide_container
+    app.dependency_overrides[get_actor] = provide_actor
+
+
 def create_app() -> FastAPI:
+    register_models()
     app = FastAPI(
         title="一站式智能招投标平台 API",
         version="1.0.0",
@@ -49,6 +74,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["Authorization", "Content-Type", "X-Request-Id", "Idempotency-Key", "If-Match"],
     )
+    register_exception_handlers(app)
+    _configure_m6_dependencies(app)
     app.include_router(api_router, prefix="/api/v1")
     app.openapi = _load_contract  # type: ignore[method-assign]
     return app
