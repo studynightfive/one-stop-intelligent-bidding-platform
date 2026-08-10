@@ -24,6 +24,13 @@ x-backend-environment: &backend-environment
   AI_DEFAULT_PROVIDER: ${AI_DEFAULT_PROVIDER:-qwen}
   AI_REQUEST_TIMEOUT_SECONDS: ${AI_REQUEST_TIMEOUT_SECONDS:-60}
   AI_MAX_RETRIES: ${AI_MAX_RETRIES:-3}
+  WORKER_EAGER_MODE: ${WORKER_EAGER_MODE:-true}
+  DEMO_SEED_ENABLED: ${DEMO_SEED_ENABLED:-true}
+  DEMO_TENANT_ID: ${DEMO_TENANT_ID:-0190f4dd-0000-7000-8000-000000000002}
+  DEMO_ADMIN_USER_ID: ${DEMO_ADMIN_USER_ID:-0190f4dd-0000-7000-8000-000000000001}
+  DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-admin@bid-platform.local}
+  DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-DemoAdmin123!}
+  DEMO_ADMIN_NAME: ${DEMO_ADMIN_NAME:-演示管理员}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3210}
   OPENAPI_CONTRACT_PATH: ${OPENAPI_CONTRACT_PATH:-/workspace/contracts/openapi.yaml}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -31,7 +38,6 @@ x-backend-environment: &backend-environment
 services:
   postgres:
     image: pgvector/pgvector:0.7.4-pg16
-    container_name: bidplat2026_postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-bid_platform}
       POSTGRES_USER: ${POSTGRES_USER:-bid_platform}
@@ -51,7 +57,6 @@ services:
 
   redis:
     image: redis:7.2.5-alpine
-    container_name: bidplat2026_redis
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-56379}:6379"
@@ -67,7 +72,6 @@ services:
 
   minio:
     image: minio/minio:RELEASE.2024-07-16T23-46-41Z
-    container_name: bidplat2026_minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-bid_platform_local}
@@ -87,7 +91,6 @@ services:
 
   minio-init:
     image: minio/mc:RELEASE.2024-07-15T17-46-06Z
-    container_name: bidplat2026_minio_init
     depends_on:
       minio:
         condition: service_healthy
@@ -105,7 +108,6 @@ services:
 
   mailpit:
     image: axllent/mailpit:v1.20.5
-    container_name: bidplat2026_mailpit
     ports:
       - "127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-51025}:1025"
       - "127.0.0.1:${MAILPIT_WEB_HOST_PORT:-58025}:8025"
@@ -117,8 +119,7 @@ services:
       context: ..
       dockerfile: infra/backend.Dockerfile
     image: bidplat2026/api:local
-    container_name: bidplat2026_api
-    command: ["/bin/sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    command: ["/bin/sh", "-c", "alembic upgrade head && python -m app.domains.auth.bootstrap && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     environment: *backend-environment
     ports:
       - "127.0.0.1:${API_PORT:-8210}:8000"
@@ -148,7 +149,6 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8210/api/v1}
         VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
     image: bidplat2026/web:local
-    container_name: bidplat2026_web
     ports:
       - "127.0.0.1:${WEB_PORT:-3210}:3210"
     depends_on:
@@ -165,7 +165,6 @@ services:
   worker:
     profiles: ["workers"]
     image: bidplat2026/api:local
-    container_name: bidplat2026_worker
     command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
     environment: *backend-environment
     volumes:
@@ -179,7 +178,6 @@ services:
   flower:
     profiles: ["workers", "observability"]
     image: bidplat2026/api:local
-    container_name: bidplat2026_flower
     command: ["celery", "-A", "app.workers.celery_app", "flower", "--port=5555"]
     environment: *backend-environment
     ports:
@@ -193,7 +191,6 @@ services:
   prometheus:
     profiles: ["observability"]
     image: prom/prometheus:v2.54.1
-    container_name: bidplat2026_prometheus
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
     ports:
       - "127.0.0.1:${PROMETHEUS_HOST_PORT:-59090}:9090"
@@ -206,7 +203,6 @@ services:
   grafana:
     profiles: ["observability"]
     image: grafana/grafana:11.2.0
-    container_name: bidplat2026_grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-local-only}
@@ -222,16 +218,10 @@ services:
 
 networks:
   platform:
-    name: bidplat2026_network
 
 volumes:
   postgres_data:
-    name: bidplat2026_postgres_data
   redis_data:
-    name: bidplat2026_redis_data
   minio_data:
-    name: bidplat2026_minio_data
   prometheus_data:
-    name: bidplat2026_prometheus_data
   grafana_data:
-    name: bidplat2026_grafana_data

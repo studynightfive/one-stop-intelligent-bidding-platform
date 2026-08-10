@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Button, Tag, Progress, Tabs, Tooltip, Avatar, Badge, Upload as AntUpload, Modal, Form, Input, Select, Checkbox, message } from 'antd'
 import {
@@ -37,6 +37,25 @@ import { BID_STEP_GUIDE, buildBidWorkflowPatch, nextBidStep, normalizeBidStep, p
 import { getBidApi } from '../adapters/getBidApi'
 import { newIdempotencyKey } from '../adapters/cryptoUtils'
 import { waitForBidJob } from '../adapters/bidJobPolling'
+import { shouldUseMocks } from '../../../api/runtime'
+import { mapBidTaskToViewModel } from '../adapters/mapBidTask'
+import type { BidTaskViewModel } from '../types'
+import {
+  bindBidMaterialFile,
+  createBidMaterial,
+  decideBidReviewFinding,
+  deleteBidMaterial,
+  exportBidMaterials,
+  fetchBidMaterials,
+  fetchBidTaskDetail,
+  fetchFileDownload,
+  fetchFilePreview,
+  generateBidMaterialTemplates,
+  startBidMaterialMatch,
+  type BidMaterial,
+  type BidReviewReport,
+  type TenderRequirements,
+} from '../adapters/bidWorkflowApi'
 
 const stepIcons: Record<number, any> = {
   1: Upload, 2: FileSearch, 3: ClipboardList, 4: Download,
@@ -50,21 +69,105 @@ const severityConfig = {
   suggestion: { icon: Lightbulb, color: '#0891B2', bg: '#ECFEFF', label: '优化' }
 }
 
+const categoryTypeLabels: Record<string, string> = {
+  qualification: '资质文件',
+  commercial: '商务文件',
+  technical: '技术文件',
+}
+
+const sourceLabels: Record<string, string> = {
+  qualification: '资质库',
+  fragment: '文档片段库',
+  upload: '本次上传',
+  template: '系统模板',
+  manual: '手动新增',
+}
+
+function materialToView(material: BidMaterial) {
+  return {
+    ...material,
+    part: material.category,
+    type: categoryTypeLabels[material.category] || material.category,
+    source: sourceLabels[material.source] || material.source,
+    libraryRef: material.sourceId || null,
+    fileName: material.file?.fileName || '',
+    apiVersion: material.version,
+  }
+}
+
+function saveBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function serverStepToWorkflow(status: string, currentStep: number) {
+  if (status === 'material_prep') return 3
+  if (status === 'ai_review') return 6
+  if (['pending_output', 'completed', 'archived'].includes(status)) return 7
+  return normalizeBidStep(currentStep)
+}
+
 export default function TaskDetailView() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { bidTasks, evaluationTasks, getTaskMaterials, updateTaskMaterial, addTaskMaterial, removeTaskMaterial, updateBidTask } = useDemo()
+  const mockMode = shouldUseMocks()
   const [activeTab, setActiveTab] = useState('materials')
   const [reviewProcessing, setReviewProcessing] = useState(false)
   const [reviewDone, setReviewDone] = useState(true)
   const [suggestionStates, setSuggestionStates] = useState<Record<string, string>>({})
+  const [liveTask, setLiveTask] = useState<BidTaskViewModel | null>(null)
+  const [liveMaterials, setLiveMaterials] = useState<any[]>([])
+  const [liveRequirements, setLiveRequirements] = useState<TenderRequirements | null>(null)
+  const [liveReview, setLiveReview] = useState<BidReviewReport | null>(null)
+  const [liveAssignments, setLiveAssignments] = useState<any[]>([])
+  const [liveDocuments, setLiveDocuments] = useState<any[]>([])
+  const [liveLoading, setLiveLoading] = useState(!mockMode)
+  const [liveError, setLiveError] = useState('')
+  const [workflowStep, setWorkflowStep] = useState(1)
   const { status: uiStatus, override, setUiOverride, retry } = useBidUiState({ bootstrapMs: 250 })
 
-  const task = bidTasks.find(t => t.id === id)
-  const relatedEvaluation = evaluationTasks.find(item => item.tenderNo === task?.tenderNo)
-  const taskMaterials = getTaskMaterials(task?.id)
-  const have = taskMaterials.filter(m => m.status === 'have').length
-  const missing = taskMaterials.filter(m => m.status === 'missing').length
+  const loadLiveTask = useCallback(async () => {
+    if (mockMode || !id) return
+    setLiveLoading(true)
+    setLiveError('')
+    try {
+      const [detail, materials] = await Promise.all([
+        fetchBidTaskDetail(id),
+        fetchBidMaterials(id),
+      ])
+      const mappedTask = mapBidTaskToViewModel(detail)
+      setLiveTask(mappedTask)
+      setLiveMaterials(materials.map(materialToView))
+      setLiveRequirements(detail.requirements || null)
+      setLiveReview(detail.latestReview || null)
+      setLiveAssignments(detail.assignments || [])
+      setLiveDocuments(detail.documents || [])
+      setReviewDone(detail.latestReview?.status === 'succeeded')
+      setWorkflowStep(serverStepToWorkflow(detail.status, detail.currentStep))
+    } catch (error) {
+      setLiveError(error instanceof Error ? error.message : '投标任务加载失败')
+    } finally {
+      setLiveLoading(false)
+    }
+  }, [id, mockMode])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadLiveTask() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadLiveTask])
+
+  const task = mockMode ? bidTasks.find(t => t.id === id) : liveTask
+  const relatedEvaluation = task?.linkedEvaluationId
+    ? { id: task.linkedEvaluationId }
+    : evaluationTasks.find(item => item.tenderNo === task?.tenderNo)
+  const taskMaterials = mockMode ? getTaskMaterials(task?.id) : liveMaterials
+  const have = taskMaterials.filter(m => ['have', 'uploaded', 'template'].includes(m.status)).length
+  const missing = taskMaterials.filter(m => ['missing', 'pending', 'rejected'].includes(m.status)).length
   const template = taskMaterials.filter(m => m.status === 'template').length
   const total = taskMaterials.length
 
@@ -85,8 +188,12 @@ export default function TaskDetailView() {
         fileVersionIds: [],
       }, newIdempotencyKey('review'))
       await waitForBidJob(initialJob)
-      const refreshed = await getBidApi().getBidTask(task.id)
-      updateBidTask(task.id, refreshed)
+      if (mockMode) {
+        const refreshed = await getBidApi().getBidTask(task.id)
+        updateBidTask(task.id, refreshed)
+      } else {
+        await loadLiveTask()
+      }
       setReviewProcessing(false)
       setReviewDone(true)
       message.success({ content: '复审完成，已更新审核结果', key: 'task-review' })
@@ -103,7 +210,8 @@ export default function TaskDetailView() {
   const applyWorkflowStep = (step: number) => {
     if (!task) return
     const patch = buildBidWorkflowPatch(step)
-    updateBidTask(task.id, patch)
+    setWorkflowStep(patch.currentStep)
+    if (mockMode) updateBidTask(task.id, patch)
     const guide = BID_STEP_GUIDE[patch.currentStep]
     if (guide?.tab) setActiveTab(guide.tab)
     return patch
@@ -119,7 +227,7 @@ export default function TaskDetailView() {
     const target = prevBidStep(current)
     applyWorkflowStep(target)
     const title = workflowSteps.find(item => item.step === target)?.title || `第 ${target} 步`
-    message.success(`已返回：${title}`)
+    message.success(`${mockMode ? '已返回' : '已切换查看'}：${title}`)
   }
 
   const goNextWorkflowStep = () => {
@@ -130,10 +238,31 @@ export default function TaskDetailView() {
       return
     }
     const target = nextBidStep(current)
-    const finish = () => {
+    const finish = async () => {
+      if (!mockMode && current === 1) {
+        message.loading({ content: '正在解析招标文件…', key: 'task-parse', duration: 0 })
+        try {
+          const job = await getBidApi().parseBidTask(task.id, newIdempotencyKey('parse'))
+          await waitForBidJob(job)
+          await loadLiveTask()
+          message.success({ content: '招标文件解析完成，已生成材料清单', key: 'task-parse' })
+        } catch (error) {
+          message.error({ content: error instanceof Error ? error.message : '招标文件解析失败', key: 'task-parse' })
+        }
+        return
+      }
+      if (!mockMode && current === 2) {
+        await loadLiveTask()
+        message.info('已刷新解析进度')
+        return
+      }
+      if (!mockMode && current === 5) {
+        await runReview()
+        return
+      }
       applyWorkflowStep(target)
       const title = workflowSteps.find(item => item.step === target)?.title || `第 ${target} 步`
-      message.success(`已进入：${title}`)
+      message.success(`${mockMode ? '已进入' : '已切换到'}：${title}`)
     }
     if (current === 5 && missing > 0) {
       Modal.confirm({
@@ -141,11 +270,11 @@ export default function TaskDetailView() {
         content: '演示环境可继续；正式环境建议先补齐材料。',
         okText: '继续',
         cancelText: '先补材料',
-        onOk: finish,
+        onOk: () => void finish(),
       })
       return
     }
-    finish()
+    void finish()
   }
 
   const jumpToWorkflowStep = (step: number) => {
@@ -161,34 +290,69 @@ export default function TaskDetailView() {
     if (target < current) {
       applyWorkflowStep(target)
       const title = workflowSteps.find(item => item.step === target)?.title || `第 ${target} 步`
-      message.success(`已返回：${title}`)
+      message.success(`${mockMode ? '已返回' : '已切换查看'}：${title}`)
       return
     }
     goNextWorkflowStep()
   }
 
-  const handleSuggestion = (suggestionId: string, action: string) => {
-    setSuggestionStates(prev => ({ ...prev, [suggestionId]: action }))
-    message.success(action === 'accepted' ? '已采纳建议并加入修改清单' : action === 'ignored' ? '已忽略该建议' : '已打开手动修改流程')
+  const handleSuggestion = async (suggestionId: string, action: string) => {
+    try {
+      if (!mockMode && task) {
+        const decision = action === 'manual' ? 'modified' : action as 'accepted' | 'ignored'
+        await decideBidReviewFinding(task.id, suggestionId, decision, action === 'manual' ? '转入人工修改' : undefined)
+        await loadLiveTask()
+      }
+      setSuggestionStates(prev => ({ ...prev, [suggestionId]: action }))
+      message.success(action === 'accepted' ? '已采纳建议并加入修改清单' : action === 'ignored' ? '已忽略该建议' : '已标记为人工修改')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '审核建议处理失败')
+    }
   }
 
-  if (uiStatus === 'loading') {
+  const displayedSuggestions = useMemo(() => {
+    if (mockMode || !liveReview) return reviewSuggestions
+    return liveReview.findings.map(finding => ({
+      ...finding,
+      severity: finding.severity === 'critical' || finding.severity === 'high'
+        ? 'error'
+        : finding.severity === 'warning'
+          ? 'warning'
+          : 'info',
+      location: finding.page ? `文件 ${finding.fileId} · 第 ${finding.page} 页` : `文件 ${finding.fileId}`,
+    }))
+  }, [liveReview, mockMode])
+
+  const displayedReviewSummary = useMemo(() => {
+    if (mockMode || !liveReview) return reviewSummary
+    return {
+      total: liveReview.counts.error + liveReview.counts.warning + liveReview.counts.info,
+      errors: liveReview.counts.error,
+      warnings: liveReview.counts.warning,
+      info: liveReview.counts.info,
+      passed: [] as string[],
+    }
+  }, [liveReview, mockMode])
+
+  const effectiveUiStatus = mockMode ? uiStatus : liveLoading ? 'loading' : liveError ? 'error' : 'ready'
+
+  if (effectiveUiStatus === 'loading') {
     return (
       <div className="p-6" data-testid={BID_TEST_IDS.taskDetail}>
-        <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>
+        {mockMode && <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>}
         <BidLoadingState tip="正在加载投标任务详情…" />
       </div>
     )
   }
-  if (uiStatus === 'error') {
+  if (effectiveUiStatus === 'error') {
     return (
       <div className="p-6" data-testid={BID_TEST_IDS.taskDetail}>
-        <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>
-        <BidErrorState onRetry={retry} />
+        {mockMode && <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>}
+        <BidErrorState onRetry={mockMode ? retry : () => void loadLiveTask()} message={liveError || undefined} />
       </div>
     )
   }
-  if (uiStatus === 'forbidden') {
+  if (effectiveUiStatus === 'forbidden') {
     return (
       <div className="p-6" data-testid={BID_TEST_IDS.taskDetail}>
         <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>
@@ -196,7 +360,7 @@ export default function TaskDetailView() {
       </div>
     )
   }
-  if (uiStatus === 'timeout') {
+  if (effectiveUiStatus === 'timeout') {
     return (
       <div className="p-6" data-testid={BID_TEST_IDS.taskDetail}>
         <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>
@@ -204,7 +368,7 @@ export default function TaskDetailView() {
       </div>
     )
   }
-  if (uiStatus === 'conflict') {
+  if (effectiveUiStatus === 'conflict') {
     return (
       <div className="p-6" data-testid={BID_TEST_IDS.taskDetail}>
         <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>
@@ -212,7 +376,7 @@ export default function TaskDetailView() {
       </div>
     )
   }
-  if (!task || uiStatus === 'not_found') {
+  if (!task || effectiveUiStatus === 'not_found') {
     return (
       <div className="p-6">
         <div className="flex justify-end mb-3"><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>
@@ -221,8 +385,36 @@ export default function TaskDetailView() {
     )
   }
 
-  const stepNow = normalizeBidStep(task.currentStep)
+  const stepNow = mockMode ? normalizeBidStep(task.currentStep) : workflowStep
   const stepGuide = BID_STEP_GUIDE[stepNow] || BID_STEP_GUIDE[3]
+  const projectInfo = liveRequirements?.projectInfo || {}
+  const collaborators = mockMode
+    ? [
+        { name: '张明远', role: '项目负责人', color: '#2563EB' },
+        { name: '李雪琴', role: '商务标', color: '#D97706' },
+        { name: '王建国', role: '技术标', color: '#16A34A' },
+        { name: '陈审核', role: '审核员', color: '#7C3AED' },
+      ]
+    : liveAssignments.map(assignment => ({
+        name: assignment.user.name,
+        role: assignment.roleInTask === 'owner' ? '项目负责人' : assignment.roleInTask === 'reviewer' ? '审核员' : '协作成员',
+        color: assignment.roleInTask === 'owner' ? '#2563EB' : assignment.roleInTask === 'reviewer' ? '#7C3AED' : '#16A34A',
+      }))
+  const displayedVersions = mockMode
+    ? documentVersions.slice(0, 4).map(version => ({
+        key: version.version,
+        label: version.version,
+        latest: version.status === 'latest',
+        summary: version.changeSummary,
+        createdAt: version.createdAt,
+      }))
+    : liveDocuments.map(document => ({
+        key: document.id,
+        label: `v${document.currentVersion}`,
+        latest: true,
+        summary: document.latestFile?.fileName || `${document.type} 文档`,
+        createdAt: document.createdAt,
+      }))
 
   return (
     <div className="p-6" data-testid={BID_TEST_IDS.taskDetail}>
@@ -231,14 +423,22 @@ export default function TaskDetailView() {
         <Button type="text" size="small" icon={<ArrowLeft size={16} />} onClick={() => navigate('/dashboard')}>
           返回投标工作台
         </Button>
-        <BidUiStateSwitcher value={override} onChange={setUiOverride} />
+        {mockMode && <BidUiStateSwitcher value={override} onChange={setUiOverride} />}
       </div>
 
       {task.status === 'failed' && (
         <BidTaskFailedBanner
           onRetry={() => {
-            updateBidTask(task.id, { status: 'parsing', currentStep: 2, progress: 15 })
-            message.success('已重新发起解析')
+            if (mockMode) {
+              updateBidTask(task.id, { status: 'parsing', currentStep: 2, progress: 15 })
+              message.success('已重新发起解析')
+              return
+            }
+            void getBidApi().parseBidTask(task.id, newIdempotencyKey('retry-parse'))
+              .then(waitForBidJob)
+              .then(loadLiveTask)
+              .then(() => message.success('已重新发起解析'))
+              .catch(error => message.error(error instanceof Error ? error.message : '重新解析失败'))
           }}
         />
       )}
@@ -257,7 +457,10 @@ export default function TaskDetailView() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          <Button icon={<RefreshCw size={14} />} onClick={() => message.success('任务状态已刷新')}>刷新</Button>
+          <Button icon={<RefreshCw size={14} />} onClick={() => {
+            if (mockMode) message.success('演示任务状态已刷新')
+            else void loadLiveTask().then(() => message.success('任务状态已刷新'))
+          }}>刷新</Button>
           <Button icon={<Gavel size={14} />} onClick={() => navigate(relatedEvaluation ? `/evaluation/${relatedEvaluation.id}` : `/evaluation/create?sourceTask=${task.id}`)}>{relatedEvaluation ? '查看关联评标' : '发起评标任务'}</Button>
           <Button
             data-testid={`${BID_TEST_IDS.workflowPrev}-header`}
@@ -380,11 +583,11 @@ export default function TaskDetailView() {
               </div>
               <div className="flex justify-between">
                 <span className="text-[#94A3B8]">预算金额</span>
-                <span className="text-[#1E293B] font-medium">{tenderRequirements.budget}</span>
+                <span className="text-[#1E293B] font-medium">{mockMode ? tenderRequirements.budget : projectInfo.budgetAmount || projectInfo.budget || '—'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-[#94A3B8]">要求工期</span>
-                <span className="text-[#1E293B]">{tenderRequirements.duration}</span>
+                <span className="text-[#1E293B]">{mockMode ? tenderRequirements.duration : projectInfo.duration || projectInfo.projectDuration || '—'}</span>
               </div>
             </div>
           </div>
@@ -394,12 +597,7 @@ export default function TaskDetailView() {
               <Users2 size={14} /> 协作成员
             </div>
             <div className="space-y-2">
-              {[
-                { name: '张明远', role: '项目负责人', color: '#2563EB' },
-                { name: '李雪琴', role: '商务标', color: '#D97706' },
-                { name: '王建国', role: '技术标', color: '#16A34A' },
-                { name: '陈审核', role: '审核员', color: '#7C3AED' }
-              ].map(m => (
+              {collaborators.map(m => (
                 <div key={m.name} className="flex items-center gap-2">
                   <Avatar size={24} style={{ background: m.color, fontSize: 10 }}>{m.name.charAt(0)}</Avatar>
                   <div>
@@ -416,15 +614,15 @@ export default function TaskDetailView() {
               <History size={14} /> 版本历史
             </div>
             <div className="space-y-2">
-              {documentVersions.slice(0, 4).map((v, i) => (
-                <div key={v.version} className="flex items-start gap-2">
-                  <div className={`w-1.5 h-1.5 rounded-full mt-1.5 ${v.status === 'latest' ? 'bg-[#16A34A]' : 'bg-[#CBD5E1]'}`} />
+              {displayedVersions.map(v => (
+                <div key={v.key} className="flex items-start gap-2">
+                  <div className={`w-1.5 h-1.5 rounded-full mt-1.5 ${v.latest ? 'bg-[#16A34A]' : 'bg-[#CBD5E1]'}`} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-medium text-[#1E293B] font-mono">{v.version}</span>
-                      {v.status === 'latest' && <Tag color="green" className="text-xs border-0 rounded">最新</Tag>}
+                      <span className="text-xs font-medium text-[#1E293B] font-mono">{v.label}</span>
+                      {v.latest && <Tag color="green" className="text-xs border-0 rounded">最新</Tag>}
                     </div>
-                    <div className="text-xs text-[#94A3B8] truncate">{v.changeSummary}</div>
+                    <div className="text-xs text-[#94A3B8] truncate">{v.summary}</div>
                     <div className="text-xs text-[#CBD5E1]">{v.createdAt}</div>
                   </div>
                 </div>
@@ -441,10 +639,10 @@ export default function TaskDetailView() {
               onChange={setActiveTab}
               className="px-4"
               items={[
-                { key: 'materials', label: <span data-testid={BID_TEST_IDS.taskMaterialsTab}>材料清单</span>, children: <MaterialsTab taskId={task.id} materials={taskMaterials} have={have} missing={missing} template={template} total={total} partLabels={partLabels} updateMaterial={updateTaskMaterial} addMaterial={addTaskMaterial} removeMaterial={removeTaskMaterial} /> },
-                { key: 'review', label: <span data-testid={BID_TEST_IDS.taskReviewTab}>AI审核</span>, children: <ReviewTab processing={reviewProcessing} done={reviewDone} onRerun={runReview} suggestionStates={suggestionStates} onSuggestion={handleSuggestion} /> },
+                { key: 'materials', label: <span data-testid={BID_TEST_IDS.taskMaterialsTab}>材料清单</span>, children: <MaterialsTab taskId={task.id} materials={taskMaterials} have={have} missing={missing} template={template} total={total} partLabels={partLabels} updateMaterial={updateTaskMaterial} addMaterial={addTaskMaterial} removeMaterial={removeTaskMaterial} mockMode={mockMode} onReload={loadLiveTask} /> },
+                { key: 'review', label: <span data-testid={BID_TEST_IDS.taskReviewTab}>AI审核</span>, children: <ReviewTab processing={reviewProcessing} done={reviewDone} onRerun={runReview} suggestionStates={suggestionStates} onSuggestion={handleSuggestion} suggestions={displayedSuggestions} summary={displayedReviewSummary} /> },
                 { key: 'output', label: <span data-testid={BID_TEST_IDS.taskOutputTab}>文档输出</span>, children: <BidDocumentOutputTab taskId={task.id} projectName={task.projectName} /> },
-                { key: 'requirements', label: <span data-testid={BID_TEST_IDS.taskRequirementsTab}>招标要求</span>, children: <RequirementsTab /> },
+                { key: 'requirements', label: <span data-testid={BID_TEST_IDS.taskRequirementsTab}>招标要求</span>, children: <RequirementsTab requirements={mockMode ? null : liveRequirements} /> },
               ]}
             />
           </div>
@@ -458,26 +656,26 @@ export default function TaskDetailView() {
                 <Zap size={14} color="#2563EB" />
               </div>
               <span className="text-sm font-medium text-[#1E293B]">AI 建议</span>
-              <Badge count={reviewSummary.total} size="small" color="#DC2626" />
+              <Badge count={displayedReviewSummary.total} size="small" color="#DC2626" />
             </div>
 
             <div className="grid grid-cols-3 gap-2 mb-4">
               <div className="bg-[#FEF2F2] rounded-lg p-2 text-center">
-                <div className="text-lg font-semibold text-[#DC2626]">{reviewSummary.errors}</div>
+                <div className="text-lg font-semibold text-[#DC2626]">{displayedReviewSummary.errors}</div>
                 <div className="text-xs text-[#94A3B8]">错误</div>
               </div>
               <div className="bg-[#FFFBEB] rounded-lg p-2 text-center">
-                <div className="text-lg font-semibold text-[#D97706]">{reviewSummary.warnings}</div>
+                <div className="text-lg font-semibold text-[#D97706]">{displayedReviewSummary.warnings}</div>
                 <div className="text-xs text-[#94A3B8]">警告</div>
               </div>
               <div className="bg-[#EFF6FF] rounded-lg p-2 text-center">
-                <div className="text-lg font-semibold text-[#2563EB]">{reviewSummary.info}</div>
+                <div className="text-lg font-semibold text-[#2563EB]">{displayedReviewSummary.info}</div>
                 <div className="text-xs text-[#94A3B8]">建议</div>
               </div>
             </div>
 
             <div className="space-y-2 max-h-[500px] overflow-y-auto">
-              {reviewSuggestions.map(s => {
+              {displayedSuggestions.map(s => {
                 const cfg = severityConfig[s.severity as keyof typeof severityConfig]
                 const Icon = cfg.icon
                 return (
@@ -508,7 +706,7 @@ export default function TaskDetailView() {
                 <Check size={12} /> 审核通过项
               </div>
               <div className="space-y-1">
-                {reviewSummary.passed.map((p, i) => (
+                {displayedReviewSummary.passed.map((p, i) => (
                   <div key={i} className="text-xs text-[#64748B] flex items-center gap-1.5">
                     <Check size={11} color="#16A34A" />
                     {p}
@@ -524,10 +722,12 @@ export default function TaskDetailView() {
 }
 
 // Materials Tab
-function MaterialsTab({ taskId, materials, have, missing, template, total, partLabels, updateMaterial, addMaterial, removeMaterial }: any) {
+function MaterialsTab({ taskId, materials, have, missing, template, total, partLabels, updateMaterial, addMaterial, removeMaterial, mockMode, onReload }: any) {
   const [expandedPart, setExpandedPart] = useState<string>('all')
   const [addOpen, setAddOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [uploadingIds, setUploadingIds] = useState<string[]>([])
   const [draft, setDraft] = useState({ name: '', type: '资质文件', part: 'qualification', requirement: '' })
 
   const parts = ['qualification', 'commercial', 'technical']
@@ -536,28 +736,78 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
   const effectiveSelectedIds = resolveSelectedMaterialIds(selectedIds, materials.map((item: any) => item.id))
   const allVisibleChecked = isAllVisibleSelected(effectiveSelectedIds, visibleIds)
 
-  const createMaterial = () => {
+  const createMaterial = async () => {
     if (!draft.name.trim() || !draft.requirement.trim()) {
       message.warning('请填写材料名称和招标要求')
       return
     }
-    addMaterial(taskId, {
-      id: `M-${Date.now()}`,
-      ...draft,
-      status: 'missing',
-      source: '手动新增',
-      libraryRef: null,
-    })
-    setDraft({ name: '', type: '资质文件', part: 'qualification', requirement: '' })
-    setAddOpen(false)
-    message.success('材料已加入清单')
+    setBusy(true)
+    try {
+      if (mockMode) {
+        addMaterial(taskId, {
+          id: `M-${Date.now()}`,
+          ...draft,
+          status: 'missing',
+          source: '手动新增',
+          libraryRef: null,
+        })
+      } else {
+        await createBidMaterial(taskId, {
+          name: draft.name.trim(),
+          category: draft.part as BidMaterial['category'],
+          requirement: draft.requirement.trim(),
+          required: true,
+          sortOrder: Math.max(0, ...materials.map((item: any) => Number(item.sortOrder) || 0)) + 1,
+        })
+        await onReload()
+      }
+      setDraft({ name: '', type: '资质文件', part: 'qualification', requirement: '' })
+      setAddOpen(false)
+      message.success('材料已加入清单')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '材料新增失败')
+    } finally {
+      setBusy(false)
+    }
   }
 
-  const batchUpload = (file: File) => {
-    const targets = materials.filter((item: any) => item.status === 'missing')
-    targets.forEach((item: any) => updateMaterial(taskId, item.id, { status: 'have', source: '批量上传', fileName: file.name }))
-    message.success(targets.length ? `已匹配并补齐 ${targets.length} 项缺失材料` : '当前没有待补齐材料')
+  const uploadOne = async (material: any, file: File) => {
+    setUploadingIds(previous => [...previous, material.id])
+    try {
+      if (mockMode) {
+        updateMaterial(taskId, material.id, { status: 'have', source: '本次上传', fileName: file.name })
+      } else {
+        const uploaded = await getBidApi().uploadFile(file, 'bidMaterial', { resourceId: material.id })
+        await bindBidMaterialFile(taskId, material.id, uploaded.id)
+        await onReload()
+      }
+      message.success(`${material.name} 上传成功`)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : `${material.name} 上传失败`)
+    } finally {
+      setUploadingIds(previous => previous.filter(id => id !== material.id))
+    }
     return false
+  }
+
+  const batchUpload = async (file: File) => {
+    if (mockMode) {
+      const targets = materials.filter((item: any) => item.status === 'missing')
+      targets.forEach((item: any) => updateMaterial(taskId, item.id, { status: 'have', source: '批量上传', fileName: file.name }))
+      message.success(targets.length ? `已匹配并补齐 ${targets.length} 项缺失材料` : '当前没有待补齐材料')
+      return false
+    }
+    const candidates = materials.filter((item: any) => ['missing', 'pending', 'rejected', 'expiring'].includes(item.status))
+    const fileKey = file.name.replace(/\.[^.]+$/, '').replace(/[\s_\-（）()]/g, '').toLowerCase()
+    const target = candidates.find((item: any) => {
+      const materialKey = String(item.name).replace(/[\s_\-（）()]/g, '').toLowerCase()
+      return fileKey.includes(materialKey) || materialKey.includes(fileKey)
+    }) || (candidates.length === 1 ? candidates[0] : null)
+    if (!target) {
+      message.warning(`无法将“${file.name}”匹配到唯一材料，请在对应材料行上传`)
+      return false
+    }
+    return uploadOne(target, file)
   }
 
   const batchDelete = () => {
@@ -572,10 +822,108 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
       okText: '确认删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
-      onOk: () => {
-        ids.forEach(id => removeMaterial(taskId, id))
-        setSelectedIds(prev => prev.filter(id => !ids.includes(id)))
-        message.success(`已删除 ${ids.length} 项材料`)
+      onOk: async () => {
+        setBusy(true)
+        try {
+          if (mockMode) ids.forEach(id => removeMaterial(taskId, id))
+          else {
+            for (const materialId of ids) await deleteBidMaterial(taskId, materialId)
+            await onReload()
+          }
+          setSelectedIds(prev => prev.filter(id => !ids.includes(id)))
+          message.success(`已删除 ${ids.length} 项材料`)
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '批量删除失败')
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
+  }
+
+  const runMaterialMatch = async () => {
+    const ids = effectiveSelectedIds.length ? effectiveSelectedIds : materials.map((item: any) => item.id)
+    if (!ids.length) { message.info('当前没有可匹配的材料'); return }
+    if (mockMode) { message.success(`已完成 ${ids.length} 项材料的智能匹配`); return }
+    setBusy(true)
+    try {
+      const job = await startBidMaterialMatch(taskId, ids, newIdempotencyKey('material-match'))
+      await waitForBidJob(job)
+      await onReload()
+      message.success('材料智能匹配已完成')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '材料智能匹配失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const downloadMaterialList = async () => {
+    if (mockMode) {
+      downloadTableAsCsv('投标材料清单.csv', ['材料名称', '类型', '招标要求', '状态', '来源'], filteredMaterials.map((m: any) => [m.name, m.type, m.requirement, materialStatusMap[m.status]?.label || m.status, m.source]))
+      return
+    }
+    try {
+      saveBlob(await exportBidMaterials(taskId), '投标材料清单.xlsx')
+      message.success('材料清单已导出')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '材料清单导出失败')
+    }
+  }
+
+  const generateTemplate = async (material: any) => {
+    if (mockMode) {
+      downloadDemoFile(`${material.name}-模板.docx`, `${material.name}\n\n请按招标要求填写后上传。`)
+      return
+    }
+    setBusy(true)
+    try {
+      if (material.file?.id) {
+        saveBlob(await fetchFileDownload(material.file.id), material.file.fileName || `${material.name}-模板.docx`)
+      } else {
+        const job = await generateBidMaterialTemplates(taskId, [material.id], newIdempotencyKey('material-template'))
+        await waitForBidJob(job)
+        await onReload()
+        message.success('材料模板已生成，请再次点击下载')
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '材料模板处理失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const previewMaterial = async (material: any) => {
+    if (mockMode || !material.file?.id) {
+      Modal.info({ title: material.name, content: `演示预览：${material.fileName || `${material.name}.pdf`} 已通过材料匹配。` })
+      return
+    }
+    try {
+      const blob = await fetchFilePreview(material.file.id)
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank', 'noopener,noreferrer')
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '文件预览失败')
+    }
+  }
+
+  const deleteSingle = (material: any) => {
+    Modal.confirm({
+      title: `删除“${material.name}”？`,
+      content: '删除后不可恢复，仅影响当前投标任务。',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          if (mockMode) removeMaterial(taskId, material.id)
+          else {
+            await deleteBidMaterial(taskId, material.id)
+            await onReload()
+          }
+          message.success('材料已删除')
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '材料删除失败')
+        }
       },
     })
   }
@@ -602,7 +950,7 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
         </div>
       </div>
 
-      <Progress percent={Math.round((have / total) * 100)} strokeColor="#2563EB" className="mb-4" />
+      <Progress percent={total ? Math.round((have / total) * 100) : 0} strokeColor="#2563EB" className="mb-4" />
 
       {/* Part filter */}
       <div className="flex items-center gap-2 mb-3">
@@ -621,6 +969,7 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
         <Button
           size="small"
           danger
+          loading={busy}
           disabled={!effectiveSelectedIds.length}
           data-testid={BID_TEST_IDS.materialsBatchDelete}
           onClick={batchDelete}
@@ -628,8 +977,9 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
         >
           批量删除{effectiveSelectedIds.length ? ` (${effectiveSelectedIds.length})` : ''}
         </Button>
-        <Button size="small" onClick={() => setAddOpen(true)} className="text-xs">新增材料</Button>
-        <Button size="small" icon={<Download size={14} />} onClick={() => downloadTableAsCsv('投标材料清单.csv', ['材料名称', '类型', '招标要求', '状态', '来源'], filteredMaterials.map((m: any) => [m.name, m.type, m.requirement, materialStatusMap[m.status]?.label || m.status, m.source]))} className="text-xs">导出清单</Button>
+        <Button size="small" loading={busy} onClick={() => void runMaterialMatch()} className="text-xs">智能匹配</Button>
+        <Button size="small" disabled={busy} onClick={() => setAddOpen(true)} className="text-xs">新增材料</Button>
+        <Button size="small" icon={<Download size={14} />} onClick={() => void downloadMaterialList()} className="text-xs">导出清单</Button>
       </div>
 
       {/* Materials table */}
@@ -657,7 +1007,11 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
           </thead>
           <tbody>
             {filteredMaterials.map((m: any, i: number) => {
-              const status = materialStatusMap[m.status]
+              const status = materialStatusMap[m.status] || {
+                pending: { label: '待处理', color: '#64748B', bg: '#F1F5F9' },
+                uploaded: { label: '已上传', color: '#16A34A', bg: '#F0FDF4' },
+                rejected: { label: '需重新提交', color: '#DC2626', bg: '#FEF2F2' },
+              }[m.status] || { label: m.status, color: '#64748B', bg: '#F1F5F9' }
               return (
                 <tr key={m.id} className="border-b border-[#F8FAFC] hover:bg-[#F8FAFC]">
                   <td className="px-3 py-2.5">
@@ -686,14 +1040,15 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
                   </td>
                   <td className="px-3 py-2.5 text-[#64748B]">{m.source}</td>
                   <td className="px-3 py-2.5 text-right">
-                    {m.status === 'have' && <Button type="link" onClick={() => Modal.info({ title: m.name, content: `演示预览：${m.fileName || m.name + '.pdf'} 已通过材料匹配。` })} size="small" className="text-xs p-0 h-5">预览</Button>}
-                    {(m.status === 'missing' || m.status === 'expiring') && (
-                      <AntUpload showUploadList={false} beforeUpload={(file) => { updateMaterial(taskId, m.id, { status: 'have', source: '本次上传', fileName: file.name }); message.success(`${m.name} 上传成功`); return false }}>
-                        <Button type="link" size="small" className="text-xs p-0 h-5">{m.status === 'expiring' ? '更新' : '上传'}</Button>
+                    {['have', 'uploaded'].includes(m.status) && <Button type="link" onClick={() => void previewMaterial(m)} size="small" className="text-xs p-0 h-5">预览</Button>}
+                    {['missing', 'pending', 'rejected', 'expiring'].includes(m.status) && (
+                      <AntUpload showUploadList={false} beforeUpload={(file) => uploadOne(m, file)}>
+                        <Button loading={uploadingIds.includes(m.id)} type="link" size="small" className="text-xs p-0 h-5">{m.status === 'expiring' ? '更新' : '上传'}</Button>
                       </AntUpload>
                     )}
-                    {m.status === 'template' && <Button type="link" onClick={() => downloadDemoFile(`${m.name}-模板.docx`, `${m.name}\n\n请按招标要求填写后上传。`)} size="small" className="text-xs p-0 h-5">下载模板</Button>}
-                    <Button type="link" danger size="small" onClick={() => Modal.confirm({ title: `删除“${m.name}”？`, content: '仅影响当前演示任务。', onOk: () => removeMaterial(taskId, m.id) })} className="text-xs !px-1 h-5">删除</Button>
+                    {['missing', 'pending', 'rejected'].includes(m.status) && <Button type="link" onClick={() => void generateTemplate(m)} size="small" className="text-xs p-0 h-5">生成模板</Button>}
+                    {m.status === 'template' && <Button type="link" onClick={() => void generateTemplate(m)} size="small" className="text-xs p-0 h-5">下载模板</Button>}
+                    <Button type="link" danger size="small" onClick={() => deleteSingle(m)} className="text-xs !px-1 h-5">删除</Button>
                   </td>
                 </tr>
               )
@@ -706,10 +1061,10 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
       <AntUpload.Dragger multiple showUploadList={false} beforeUpload={batchUpload} className="!mt-4">
         <UploadCloud size={28} className="mx-auto text-[#94A3B8] mb-2" />
         <div className="text-sm text-[#64748B]">拖拽文件到此处批量上传，或<span className="text-[#2563EB]">点击选择文件</span></div>
-        <div className="text-xs text-[#94A3B8] mt-1">演示模式会自动匹配并补齐当前缺失材料</div>
+        <div className="text-xs text-[#94A3B8] mt-1">{mockMode ? '演示模式会自动匹配并补齐当前缺失材料' : '多文件上传时请让文件名包含对应材料名称；无法唯一匹配时请使用行内上传'}</div>
       </AntUpload.Dragger>
 
-      <Modal title="新增材料" open={addOpen} onCancel={() => setAddOpen(false)} onOk={createMaterial} okText="加入清单" cancelText="取消">
+      <Modal title="新增材料" open={addOpen} confirmLoading={busy} onCancel={() => setAddOpen(false)} onOk={() => void createMaterial()} okText="加入清单" cancelText="取消">
         <div className="space-y-4 pt-2">
           <Input value={draft.name} onChange={e => setDraft(prev => ({ ...prev, name: e.target.value }))} placeholder="材料名称" />
           <div className="grid grid-cols-2 gap-3">
@@ -724,7 +1079,7 @@ function MaterialsTab({ taskId, materials, have, missing, template, total, partL
 }
 
 // AI Review Tab
-function ReviewTab({ processing, done, onRerun, suggestionStates, onSuggestion }: { processing: boolean; done: boolean; onRerun: () => void; suggestionStates: Record<string, string>; onSuggestion: (id: string, action: string) => void }) {
+function ReviewTab({ processing, done, onRerun, suggestionStates, onSuggestion, suggestions, summary }: { processing: boolean; done: boolean; onRerun: () => void; suggestionStates: Record<string, string>; onSuggestion: (id: string, action: string) => void | Promise<void>; suggestions: any[]; summary: { total: number; errors: number; warnings: number; info: number } }) {
   const reviewStepLabels = [
     '正在解析文档结构...',
     '正在检查签字盖章...',
@@ -748,10 +1103,10 @@ function ReviewTab({ processing, done, onRerun, suggestionStates, onSuggestion }
               <Tag color={processing ? 'processing' : 'green'} className="border-0 rounded text-xs">{processing ? '处理中' : done ? '已完成' : '待审核'}</Tag>
             </div>
             <div className="text-xs text-[#64748B]">
-              共发现 <span className="text-[#DC2626] font-medium">{reviewSummary.total}</span> 处问题，
-              其中 <span className="text-[#DC2626] font-medium">{reviewSummary.errors} 错误</span>，
-              <span className="text-[#D97706] font-medium"> {reviewSummary.warnings} 警告</span>，
-              <span className="text-[#2563EB] font-medium"> {reviewSummary.info} 建议</span>
+              共发现 <span className="text-[#DC2626] font-medium">{summary.total}</span> 处问题，
+              其中 <span className="text-[#DC2626] font-medium">{summary.errors} 错误</span>，
+              <span className="text-[#D97706] font-medium"> {summary.warnings} 警告</span>，
+              <span className="text-[#2563EB] font-medium"> {summary.info} 建议</span>
             </div>
           </div>
           <Button loading={processing} disabled={processing} onClick={onRerun} type="primary" icon={<RefreshCw size={14} />} className="text-xs">重新审核</Button>
@@ -777,7 +1132,7 @@ function ReviewTab({ processing, done, onRerun, suggestionStates, onSuggestion }
       {/* Detailed suggestions */}
       <div className="space-y-3">
         <div className="text-sm font-medium text-[#1E293B]">详细审核结果</div>
-        {reviewSuggestions.map(s => {
+        {suggestions.map(s => {
           const cfg = severityConfig[s.severity as keyof typeof severityConfig]
           const Icon = cfg.icon
           const typeLabels: Record<string, string> = {
@@ -810,9 +1165,9 @@ function ReviewTab({ processing, done, onRerun, suggestionStates, onSuggestion }
                 </div>
               </div>
               <div className="flex items-center gap-2 pl-11">
-                <Button disabled={Boolean(suggestionStates[s.id])} onClick={() => onSuggestion(s.id, 'accepted')} type="primary" size="small" className="text-xs h-7">采纳建议</Button>
-                <Button disabled={Boolean(suggestionStates[s.id])} onClick={() => onSuggestion(s.id, 'ignored')} size="small" className="text-xs h-7">忽略</Button>
-                <Button disabled={Boolean(suggestionStates[s.id])} onClick={() => onSuggestion(s.id, 'manual')} size="small" type="text" className="text-xs h-7">手动修改</Button>
+                <Button disabled={Boolean(suggestionStates[s.id]) || Boolean(s.decision && s.decision !== 'pending')} onClick={() => void onSuggestion(s.id, 'accepted')} type="primary" size="small" className="text-xs h-7">采纳建议</Button>
+                <Button disabled={Boolean(suggestionStates[s.id]) || Boolean(s.decision && s.decision !== 'pending')} onClick={() => void onSuggestion(s.id, 'ignored')} size="small" className="text-xs h-7">忽略</Button>
+                <Button disabled={Boolean(suggestionStates[s.id]) || Boolean(s.decision && s.decision !== 'pending')} onClick={() => void onSuggestion(s.id, 'manual')} size="small" type="text" className="text-xs h-7">手动修改</Button>
                 {suggestionStates[s.id] && <Tag color="green">已处理</Tag>}
               </div>
             </div>
@@ -823,14 +1178,32 @@ function ReviewTab({ processing, done, onRerun, suggestionStates, onSuggestion }
   )
 }
 
-function RequirementsTab() {
+function RequirementsTab({ requirements }: { requirements: TenderRequirements | null }) {
+  const scoringItems = requirements
+    ? requirements.scoringItems.map(item => ({ item: item.name, maxScore: item.score, desc: item.basis }))
+    : tenderRequirements.scoringItems
+  const disqualItems = requirements
+    ? requirements.disqualificationItems.map(item => `${item.name}：${item.basis}`)
+    : tenderRequirements.disqualItems
+  const extractedItems = requirements
+    ? [
+        ...Object.entries(requirements.projectInfo).map(([label, value]) => ({ label, value })),
+        ...requirements.qualificationRequirements.map((value, index) => ({ label: `资质要求 ${index + 1}`, value })),
+        ...requirements.technicalRequirements.map((value, index) => ({ label: `技术要求 ${index + 1}`, value })),
+      ]
+    : [
+        { label: '预算金额', value: tenderRequirements.budget },
+        { label: '要求工期', value: tenderRequirements.duration },
+        { label: '投标保证金', value: '50万元' },
+        { label: '资质等级要求', value: 'CMMI 3级 + ITSS三级' },
+      ]
   return (
     <div className="pb-4 space-y-4">
       {/* Scoring items */}
       <div>
         <div className="text-sm font-medium text-[#1E293B] mb-3">评分标准</div>
         <div className="space-y-2">
-          {tenderRequirements.scoringItems.map((item, i) => (
+          {scoringItems.map((item, i) => (
             <div key={i} className="flex items-center gap-3 bg-[#F8FAFC] rounded-lg p-3">
               <div className="w-12 h-12 rounded-lg bg-white flex flex-col items-center justify-center flex-shrink-0">
                 <span className="text-lg font-bold text-[#2563EB]">{item.maxScore}</span>
@@ -851,7 +1224,7 @@ function RequirementsTab() {
           <AlertCircle size={15} color="#DC2626" /> 废标条款（违反任一条即废标）
         </div>
         <div className="bg-[#FEF2F2] rounded-xl p-4 space-y-2">
-          {tenderRequirements.disqualItems.map((item, i) => (
+          {disqualItems.map((item, i) => (
             <div key={i} className="flex items-start gap-2 text-xs text-[#1E293B]">
               <span className="text-[#DC2626] font-medium flex-shrink-0">{i + 1}.</span>
               <span>{item}</span>
@@ -867,23 +1240,9 @@ function RequirementsTab() {
         </div>
         <div className="bg-[#EFF6FF] rounded-xl p-4 space-y-2">
           <div className="text-xs text-[#64748B]">以下内容由AI智能体从招标文件中自动提取，请核对确认</div>
-          <div className="grid grid-cols-2 gap-3 mt-2">
-            <div className="bg-white rounded-lg p-3">
-              <div className="text-xs text-[#94A3B8] mb-0.5">预算金额</div>
-              <div className="text-sm font-medium text-[#1E293B]">{tenderRequirements.budget}</div>
-            </div>
-            <div className="bg-white rounded-lg p-3">
-              <div className="text-xs text-[#94A3B8] mb-0.5">要求工期</div>
-              <div className="text-sm font-medium text-[#1E293B]">{tenderRequirements.duration}</div>
-            </div>
-            <div className="bg-white rounded-lg p-3">
-              <div className="text-xs text-[#94A3B8] mb-0.5">投标保证金</div>
-              <div className="text-sm font-medium text-[#1E293B]">50万元</div>
-            </div>
-            <div className="bg-white rounded-lg p-3">
-              <div className="text-xs text-[#94A3B8] mb-0.5">资质等级要求</div>
-              <div className="text-sm font-medium text-[#1E293B]">CMMI 3级 + ITSS三级</div>
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+            {extractedItems.map((item, index) => <div key={`${item.label}-${index}`} className="bg-white rounded-lg p-3"><div className="text-xs text-[#94A3B8] mb-0.5">{item.label}</div><div className="text-sm font-medium text-[#1E293B]">{item.value}</div></div>)}
+            {!extractedItems.length && <div className="text-xs text-[#94A3B8]">尚未提取到结构化招标要求</div>}
           </div>
         </div>
       </div>
