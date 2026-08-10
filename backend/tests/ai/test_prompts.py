@@ -12,7 +12,7 @@ from app.ai.prompts.registry import (
 )
 
 
-def test_default_registry_has_nine_templates() -> None:
+def test_default_registry_has_all_templates() -> None:
     reg = build_default_registry()
     names = reg.names()
     assert set(names) == {
@@ -21,6 +21,8 @@ def test_default_registry_has_nine_templates() -> None:
         "material_match",
         "bid_review",
         "bid_generate",
+        "bid_generate_plan",
+        "bid_generate_paragraph",
         "risk_check",
         "evaluation_check",
         "evaluation_score",

@@ -52,6 +52,8 @@ async def test_router_invokes_all_scenes() -> None:
         ("material_match", "material_match"),
         ("bid_review", "bid_review"),
         ("bid_generate", "bid_generate"),
+        ("bid_generate", "bid_generate_plan"),
+        ("bid_generate", "bid_generate_paragraph"),
         ("risk_check", "risk_check"),
         ("evaluation_check", "evaluation_check"),
         ("evaluation_score", "evaluation_score"),
@@ -69,7 +71,7 @@ async def test_router_invokes_all_scenes() -> None:
         )
         output = await router.invoke(spec, payload={})
         assert output.text, f"{scene} should produce output"
-        assert output.prompt_version.name == scene
+        assert output.prompt_version.name == prompt_name
 
 
 @pytest.mark.asyncio

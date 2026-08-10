@@ -242,6 +242,11 @@ def run_task_handler(
                 error_message="all providers failed",
             )
             return failed.to_dict()
+        except task.autoretry_for:
+            # Let Celery's autoretry wrapper apply the declared exponential
+            # backoff.  Swallowing these errors here made ``autoretry_for`` a
+            # no-op and discarded resumable worker checkpoints.
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("m7.task.unhandled task=%s job=%s", task.name, job_id)
             failed = task.make_failure_result(
