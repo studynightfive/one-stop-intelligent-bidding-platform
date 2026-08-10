@@ -787,7 +787,7 @@ export interface paths {
         put?: never;
         /**
          * POST /bid-tasks/{taskId}/documents
-         * @description 请求：GenerateBidDocumentRequest；响应 data：JobRef；权限：owner。
+         * @description 请求：GenerateBidDocumentRequest；响应 data：JobRef；权限：owner。技术标必须按 technicalDocument 中锁定的格式逐段生成，图片按 sectionKey 与段落锚点插入。
          */
         post: operations["post_bid_tasks_taskId_documents"];
         delete?: never;
@@ -3092,6 +3092,36 @@ export interface components {
             templateMode: "tender_requirement" | "standard";
             documentTemplateId?: components["schemas"]["Id"];
             includeWatermark: boolean;
+            technicalDocument?: components["schemas"]["TechnicalDocumentGenerationOptions"];
+        };
+        TechnicalDocumentSectionTemplate: {
+            key: string;
+            heading: string;
+            headingLevel: number;
+            instructions: string;
+            targetParagraphs: number;
+            targetWordsPerParagraph: number;
+            required: boolean;
+        };
+        TechnicalDocumentImage: {
+            fileId: components["schemas"]["Id"];
+            sectionKey: string;
+            caption: string;
+            altText?: string;
+            /** @enum {string} */
+            placement: "before_section" | "after_paragraph" | "after_section";
+            afterParagraphIndex?: number;
+        };
+        TechnicalDocumentGenerationOptions: {
+            /** @enum {string} */
+            strategy: "paragraph_by_paragraph";
+            templateName: string;
+            sections: components["schemas"]["TechnicalDocumentSectionTemplate"][];
+            referenceImages: components["schemas"]["TechnicalDocumentImage"][];
+            contextWindowCharacters: number;
+            carryForwardParagraphs: number;
+            preserveHeadingNumbering: boolean;
+            requireEvidence: boolean;
         };
         CreateQualificationRequest: {
             name: string;
@@ -3194,7 +3224,7 @@ export interface components {
             sizeBytes: number;
             sha256: string;
             /** @enum {string} */
-            purpose: "tender" | "bidMaterial" | "qualification" | "fragment" | "supplierMaterial" | "template";
+            purpose: "tender" | "bidMaterial" | "bidIllustration" | "qualification" | "fragment" | "supplierMaterial" | "template";
             resourceId?: components["schemas"]["Id"];
         };
         UploadPart: {

@@ -661,15 +661,55 @@ class TemplateMode(Enum):
     standard = 'standard'
 
 
-class GenerateBidDocumentRequest(BaseModel):
+class TechnicalDocumentSectionTemplate(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    mode: Mode
-    sections: list[Section] = Field(..., min_length=1)
-    templateMode: TemplateMode
-    documentTemplateId: Id | None = None
-    includeWatermark: bool
+    key: constr(pattern=r'^[a-zA-Z][a-zA-Z0-9_-]{0,63}$')
+    heading: constr(min_length=1, max_length=200)
+    headingLevel: conint(ge=1, le=3)
+    instructions: constr(min_length=1, max_length=4000)
+    targetParagraphs: conint(ge=1, le=30)
+    targetWordsPerParagraph: conint(ge=80, le=1500)
+    required: bool
+
+
+class Placement(Enum):
+    before_section = 'before_section'
+    after_paragraph = 'after_paragraph'
+    after_section = 'after_section'
+
+
+class TechnicalDocumentImage(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    fileId: Id
+    sectionKey: constr(pattern=r'^[a-zA-Z][a-zA-Z0-9_-]{0,63}$')
+    caption: constr(min_length=1, max_length=300)
+    altText: constr(max_length=500) | None = None
+    placement: Placement
+    afterParagraphIndex: conint(ge=1, le=30) | None = None
+
+
+class Strategy(Enum):
+    paragraph_by_paragraph = 'paragraph_by_paragraph'
+
+
+class TechnicalDocumentGenerationOptions(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    strategy: Strategy
+    templateName: constr(min_length=1, max_length=200)
+    sections: list[TechnicalDocumentSectionTemplate] = Field(
+        ..., max_length=60, min_length=1
+    )
+    referenceImages: list[TechnicalDocumentImage] = Field(..., max_length=50)
+    contextWindowCharacters: conint(ge=2000, le=200000)
+    carryForwardParagraphs: conint(ge=0, le=10)
+    preserveHeadingNumbering: bool
+    requireEvidence: bool
 
 
 class ReminderDay(RootModel[conint(ge=0)]):
@@ -811,6 +851,7 @@ class CreatePriceRoundRequest(BaseModel):
 class Purpose(Enum):
     tender = 'tender'
     bidMaterial = 'bidMaterial'
+    bidIllustration = 'bidIllustration'
     qualification = 'qualification'
     fragment = 'fragment'
     supplierMaterial = 'supplierMaterial'
@@ -1719,3 +1760,15 @@ class DependencyHealth(BaseModel):
     status: Status8
     dependencies: list[DependencyItemHealth]
     checkedAt: IsoDateTime
+
+
+class GenerateBidDocumentRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    mode: Mode
+    sections: list[Section] = Field(..., min_length=1)
+    templateMode: TemplateMode
+    documentTemplateId: Id | None = None
+    includeWatermark: bool
+    technicalDocument: TechnicalDocumentGenerationOptions | None = None
