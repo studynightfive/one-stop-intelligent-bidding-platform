@@ -1,24 +1,26 @@
-﻿import type { Locator, Page } from '@playwright/test';
-import { testIds } from './testIds';
+import type { Locator, Page } from '@playwright/test'
+import { testIds } from '../helpers/testIds'
 
-/**
- * 登录页 Page Object（M3 拥有，本 Phase 仅为 Phase 1+ smoke 准备）。
- */
 export class LoginPage {
-  constructor(private readonly page: Page) {}
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+  }
 
   async goto(): Promise<void> {
-    await this.page.goto('/login');
+    await this.page.goto('/login')
+    await this.page.getByTestId(testIds.loginPage).waitFor({ state: 'visible' })
   }
 
   async login(email: string, password: string): Promise<void> {
-    await this.page.fill(`[data-testid="${testIds.loginEmailInput}"]`, email);
-    await this.page.fill(`[data-testid="${testIds.loginPasswordInput}"]`, password);
-    await this.page.click(`[data-testid="${testIds.loginSubmitButton}"]`);
+    await this.page.locator('input[autocomplete="username"]').fill(email)
+    await this.page.locator('input[autocomplete="current-password"]').fill(password)
+    await this.page.getByRole('button', { name: '登录', exact: true }).click()
   }
 
   async expectLoaded(): Promise<void> {
-    const shell: Locator = this.page.locator(`[data-testid="${testIds.appShell}"]`);
-    await shell.waitFor({ state: 'visible', timeout: 5_000 });
+    const dashboard: Locator = this.page.getByTestId(testIds.bidDashboard)
+    await dashboard.waitFor({ state: 'visible', timeout: 10_000 })
   }
 }
