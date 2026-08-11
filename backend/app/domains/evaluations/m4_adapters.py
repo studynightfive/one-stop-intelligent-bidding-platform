@@ -7,11 +7,12 @@ M4 未合入当前工作树时，import 会失败；测试请继续用 Recording
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from app.domains.evaluations.ports import (
     AuditEventInput,
+    AuditEventSnapshot,
     AuditServicePort,
     FileRefSnapshot,
     FileServicePort,
@@ -104,6 +105,8 @@ class M4JobDispatcherAdapter:
             progress_percent=int(getattr(job, "progress_percent", 0) or 0),
             created_at=created_at,
             current_step=getattr(job, "current_step", None),
+            result=getattr(job, "result", None),
+            error=getattr(job, "error", None),
         )
 
 
@@ -168,6 +171,79 @@ class M4AuditAdapter:
             changes=changes,
             request_id=event.request_id,
             ip_address=event.ip_address,
+        )
+
+    async def list_events(
+        self,
+        *,
+        tenant_id: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        actor: str | None = None,
+        action: str | None = None,
+        resource: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[AuditEventSnapshot], int]:
+        actor_id: UUID | None = None
+        actor_name_filter: str | None = None
+        if actor:
+            try:
+                actor_id = _as_uuid(actor)
+            except ValueError:
+                actor_name_filter = actor.casefold()
+
+        query_limit = 10_000 if actor_name_filter else limit
+        query_offset = 0 if actor_name_filter else offset
+        events, total = await self._service.list_events(
+            tenant_id=_as_uuid(tenant_id),
+            aggregate_type=aggregate_type,
+            aggregate_id=_as_uuid(aggregate_id),
+            actor_id=actor_id,
+            action=action,
+            target_type=resource,
+            start_date=date_from,
+            end_date=date_to,
+            limit=query_limit,
+            offset=query_offset,
+        )
+        if actor_name_filter:
+            events = [event for event in events if actor_name_filter in event.actor_name.casefold()]
+            total = len(events)
+            events = events[offset : offset + limit]
+
+        return [self._snapshot(event) for event in events], total
+
+    @staticmethod
+    def _snapshot(event: Any) -> AuditEventSnapshot:
+        raw_changes = getattr(event, "changes", None)
+        changes: tuple[dict[str, Any], ...] = ()
+        if isinstance(raw_changes, dict):
+            raw_items = raw_changes.get("items")
+            if isinstance(raw_items, list):
+                changes = tuple(item for item in raw_items if isinstance(item, dict))
+
+        actor_type = _enum_value(event.actor_type)
+        if actor_type not in {"user", "supplier", "system"}:
+            actor_type = "system"
+        return AuditEventSnapshot(
+            id=str(event.id),
+            tenant_id=str(event.tenant_id),
+            aggregate_type=str(event.aggregate_type),
+            aggregate_id=str(event.aggregate_id),
+            actor_type=cast(Any, actor_type),
+            actor_id=str(event.actor_id) if event.actor_id else None,
+            actor_name=str(event.actor_name),
+            action=str(event.action),
+            summary=str(event.summary),
+            request_id=str(event.request_id),
+            created_at=event.created_at,
+            target_type=getattr(event, "target_type", None),
+            target_id=str(event.target_id) if getattr(event, "target_id", None) else None,
+            changes=changes,
+            ip_address=getattr(event, "ip_address", None),
         )
 
 

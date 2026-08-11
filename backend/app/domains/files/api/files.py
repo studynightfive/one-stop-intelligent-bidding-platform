@@ -1,276 +1,308 @@
-"""文件API路由.
+"""HTTP API for contract-aligned resumable uploads and file delivery."""
 
-实现文件上传相关接口：
-- POST /files/upload-sessions - 创建上传会话
-- GET /files/upload-sessions/{uploadId} - 查询上传会话
-- PUT /files/upload-sessions/{uploadId}/parts/{partNumber} - 上传分片
-- POST /files/upload-sessions/{uploadId}/complete - 完成上传
-- DELETE /files/upload-sessions/{uploadId} - 取消上传
-- GET /files/{fileId}/preview - 预览文件
-- GET /files/{fileId}/download - 下载文件
-"""
+from __future__ import annotations
 
-import secrets
-from typing import Any
-from uuid import UUID
+from collections.abc import Iterator
+from typing import Annotated, Any
+from urllib.parse import quote
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, UploadFile, status
-from fastapi import File as FastAPIFile
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
-from app.core.dependencies import AuthenticatedUser, DBSession
-from app.core.errors import FileRejectedError, NotFoundError
+from app.core.dependencies import (
+    AuthenticatedUser,
+    DBSession,
+    bearer_scheme,
+    get_current_active_user,
+    get_current_user,
+)
+from app.core.errors import NotFoundError
+from app.domains.evaluations.container import M6Container
+from app.domains.evaluations.errors import DomainError
+from app.domains.evaluations.router import get_container
 from app.domains.files.schemas.file import (
     CompleteUploadRequest,
+    CreateUploadSessionRequest,
     FileResponse,
     FileUploadSessionResponse,
     PartUploadResponse,
+    UploadPart,
 )
 from app.domains.files.services.file_service import FileService
 
-router = APIRouter(prefix="/files", tags=["文件平台"])
+router = APIRouter(prefix="/files", tags=["文件、异步任务与实时事件"])
+
+
+async def get_upload_actor(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: DBSession,
+    container: Annotated[M6Container, Depends(get_container)],
+) -> dict[str, Any]:
+    """Authenticate resumable uploads for either an internal user or a supplier portal.
+
+    Portal access is intentionally limited in ``create_upload_session`` to the
+    ``supplierMaterial`` purpose. Subsequent chunk operations remain protected by
+    the persisted creator id, so one portal supplier cannot resume another
+    supplier's upload.
+    """
+
+    internal_error: HTTPException
+    try:
+        current_user = await get_current_user(credentials, db)
+        return await get_current_active_user(current_user)
+    except HTTPException as exc:
+        internal_error = exc
+
+    if credentials is None:
+        raise internal_error
+    try:
+        portal = container.portal.resolve_principal(credentials.credentials)
+    except DomainError as exc:
+        raise internal_error from exc
+    return {
+        "id": portal.supplier_id,
+        "tenant_id": portal.tenant_id,
+        "role": "portal",
+        "status": "active",
+        "name": portal.name,
+        "auth_channel": "portal",
+    }
+
+
+UploadActor = Annotated[dict[str, Any], Depends(get_upload_actor)]
+
+
+def _assert_portal_upload_scope(current_user: dict[str, Any], body: CreateUploadSessionRequest) -> None:
+    if current_user.get("auth_channel") != "portal":
+        return
+    if body.purpose != "supplierMaterial":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "供应商门户只能上传投标材料"},
+        )
+    if body.resource_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "VALIDATION_ERROR", "message": "供应商材料上传必须指定 material resourceId"},
+        )
+
+
+def _request_id(request: Request) -> str:
+    return request.headers.get("X-Request-Id") or str(uuid4())
+
+
+def _success(request: Request, data: Any, *, status_code: int = 200) -> JSONResponse:
+    request_id = _request_id(request)
+    if hasattr(data, "model_dump"):
+        data = data.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder({"success": True, "data": data, "requestId": request_id}),
+        headers={"X-Request-Id": request_id},
+    )
 
 
 def _session_to_response(session: Any) -> FileUploadSessionResponse:
-    """将会话模型转换为响应模型."""
     return FileUploadSessionResponse(
         id=session.id,
         file_name=session.file_name,
         size_bytes=session.size_bytes,
         part_size_bytes=session.part_size_bytes,
         total_parts=session.total_parts,
-        uploaded_parts=session.uploaded_parts,
+        uploaded_parts=[
+            UploadPart(part_number=int(item["part_number"]), etag=str(item["etag"])) for item in session.uploaded_parts
+        ],
         status=session.status.value,
         expires_at=session.expires_at,
     )
 
 
-def _file_to_response(file: Any) -> FileResponse:
-    """将文件模型转换为响应模型."""
+def _file_to_response(file_record: Any) -> FileResponse:
     return FileResponse(
-        id=file.id,
-        file_name=file.file_name,
-        mime_type=file.mime_type,
-        size_bytes=file.size_bytes,
-        sha256=file.sha256,
-        scan_status=file.scan_status.value,
-        preview_url=None,  # TODO: 需要生成签名URL
-        download_url=None,
-        created_at=file.created_at,
+        id=file_record.id,
+        file_name=file_record.file_name,
+        mime_type=file_record.mime_type,
+        size_bytes=file_record.size_bytes,
+        sha256=file_record.sha256,
+        scan_status=file_record.scan_status.value,
+        created_at=file_record.created_at,
     )
+
+
+def _as_uuid(value: object, field: str) -> UUID:
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHENTICATED", "message": f"登录信息缺少有效的 {field}"},
+        ) from exc
 
 
 @router.post(
     "/upload-sessions",
-    response_model=FileUploadSessionResponse,
+    status_code=status.HTTP_201_CREATED,
     summary="创建上传会话",
-    description="创建大文件分片上传会话，返回会话ID和分片信息。",
-    responses={
-        201: {"description": "会话创建成功"},
-        400: {"description": "文件不符合要求"},
-    },
 )
 async def create_upload_session(
-    request: dict[str, Any],
-    current_user: AuthenticatedUser,
+    body: CreateUploadSessionRequest,
+    request: Request,
+    current_user: UploadActor,
     db: DBSession,
-) -> FileUploadSessionResponse:
-    """创建上传会话."""
-    file_service = FileService(db)
-
-    session = await file_service.create_upload_session(
-        tenant_id=UUID(current_user["tenant_id"]),
-        user_id=UUID(current_user["id"]),
-        file_name=request["file_name"],
-        mime_type=request["mime_type"],
-        size_bytes=request["size_bytes"],
-        sha256=request["sha256"],
-        purpose=request.get("purpose", "general"),
-        resource_id=UUID(request["resource_id"]) if request.get("resource_id") else None,
+) -> JSONResponse:
+    _assert_portal_upload_scope(current_user, body)
+    session = await FileService(db).create_upload_session(
+        tenant_id=_as_uuid(current_user.get("tenant_id"), "tenant_id"),
+        user_id=_as_uuid(current_user.get("id"), "user_id"),
+        file_name=body.file_name,
+        mime_type=body.mime_type,
+        size_bytes=body.size_bytes,
+        sha256=body.sha256,
+        purpose=body.purpose,
+        resource_id=body.resource_id,
     )
+    return _success(request, _session_to_response(session), status_code=status.HTTP_201_CREATED)
 
-    return _session_to_response(session)
 
-
-@router.get(
-    "/upload-sessions/{upload_id}",
-    response_model=FileUploadSessionResponse,
-    summary="查询上传会话",
-    description="查询上传会话状态和进度。",
-    responses={
-        200: {"description": "成功"},
-        404: {"description": "会话不存在"},
-    },
-)
+@router.get("/upload-sessions/{upload_id}", summary="查询上传会话")
 async def get_upload_session(
     upload_id: UUID,
-    current_user: AuthenticatedUser,
+    request: Request,
+    current_user: UploadActor,
     db: DBSession,
-) -> FileUploadSessionResponse:
-    """获取上传会话."""
-    file_service = FileService(db)
-
-    session = await file_service.get_upload_session(
+) -> JSONResponse:
+    session = await FileService(db).get_upload_session(
         session_id=upload_id,
-        user_id=UUID(current_user["id"]),
+        user_id=_as_uuid(current_user.get("id"), "user_id"),
     )
-
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "上传会话不存在或已过期"},
+    if session is None:
+        raise NotFoundError(
+            message="上传会话不存在或已过期", resource_type="upload_session", resource_id=str(upload_id)
         )
-
-    return _session_to_response(session)
+    return _success(request, _session_to_response(session))
 
 
 @router.put(
     "/upload-sessions/{upload_id}/parts/{part_number}",
-    response_model=PartUploadResponse,
     summary="上传分片",
-    description="上传单个分片内容。",
-    responses={
-        200: {"description": "上传成功"},
-        400: {"description": "分片无效"},
-        404: {"description": "会话不存在"},
-    },
 )
 async def upload_part(
     upload_id: UUID,
     part_number: int,
-    current_user: AuthenticatedUser,
+    body: Annotated[bytes, Body(media_type="application/octet-stream")],
+    request: Request,
+    current_user: UploadActor,
     db: DBSession,
-    file: UploadFile = FastAPIFile(...),
-) -> PartUploadResponse:
-    """上传分片."""
-    file_service = FileService(db)
-
-    # TODO: 实现实际的MinIO分片上传
-    # 目前返回模拟的ETag
-    etag = f"etag-{secrets.token_hex(16)}"
-
-    await file_service.record_uploaded_part(
+) -> JSONResponse:
+    _, etag = await FileService(db).upload_part(
         session_id=upload_id,
+        user_id=_as_uuid(current_user.get("id"), "user_id"),
         part_number=part_number,
-        etag=etag,
+        content=body,
     )
-
-    return PartUploadResponse(
-        part_number=part_number,
-        etag=etag,
-    )
+    return _success(request, PartUploadResponse(part_number=part_number, etag=etag))
 
 
-@router.post(
-    "/upload-sessions/{upload_id}/complete",
-    response_model=FileResponse,
-    summary="完成上传",
-    description="完成分片上传，合并文件并创建元数据。",
-    responses={
-        200: {"description": "上传完成"},
-        400: {"description": "分片不完整"},
-        404: {"description": "会话不存在"},
-    },
-)
+@router.post("/upload-sessions/{upload_id}/complete", summary="完成上传")
 async def complete_upload(
     upload_id: UUID,
-    request: CompleteUploadRequest,
-    current_user: AuthenticatedUser,
+    body: CompleteUploadRequest,
+    request: Request,
+    current_user: UploadActor,
     db: DBSession,
-) -> FileResponse:
-    """完成上传."""
-    file_service = FileService(db)
-
-    try:
-        file_record = await file_service.complete_upload(
-            session_id=upload_id,
-            parts=request.parts,
-        )
-        return _file_to_response(file_record)
-    except FileRejectedError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": e.code, "message": e.message},
-        ) from e
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+) -> JSONResponse:
+    _ = idempotency_key
+    file_record = await FileService(db).complete_upload(
+        session_id=upload_id,
+        parts=body.parts,
+        user_id=_as_uuid(current_user.get("id"), "user_id"),
+    )
+    return _success(request, _file_to_response(file_record))
 
 
 @router.delete(
     "/upload-sessions/{upload_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="取消上传",
-    description="取消上传会话，清理已上传的分片。",
-    responses={
-        204: {"description": "已取消"},
-        404: {"description": "会话不存在"},
-    },
 )
 async def cancel_upload(
     upload_id: UUID,
-    current_user: AuthenticatedUser,
+    request: Request,
+    current_user: UploadActor,
     db: DBSession,
-) -> None:
-    """取消上传."""
-    file_service = FileService(db)
-    await file_service.cancel_upload_session(
+) -> Response:
+    await FileService(db).cancel_upload_session(
         session_id=upload_id,
-        user_id=UUID(current_user["id"]),
+        user_id=_as_uuid(current_user.get("id"), "user_id"),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"X-Request-Id": _request_id(request)})
+
+
+def _stream_object(response: Any) -> Iterator[bytes]:
+    try:
+        yield from response.stream(64 * 1024)
+    finally:
+        response.close()
+        response.release_conn()
+
+
+async def _file_stream_response(
+    *,
+    file_id: UUID,
+    request: Request,
+    current_user: dict[str, Any],
+    db: Any,
+    disposition: str,
+) -> StreamingResponse:
+    file_record, object_response = await FileService(db).open_file(
+        file_id=file_id,
+        tenant_id=_as_uuid(current_user.get("tenant_id"), "tenant_id"),
+    )
+    request_id = _request_id(request)
+    encoded_name = quote(file_record.file_name, safe="")
+    return StreamingResponse(
+        _stream_object(object_response),
+        media_type=file_record.mime_type or "application/octet-stream",
+        headers={
+            "X-Request-Id": request_id,
+            "X-File-Sha256": file_record.sha256,
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{encoded_name}",
+        },
     )
 
 
-@router.get(
-    "/{file_id}/preview",
-    summary="预览文件",
-    description="获取文件预览URL（预签名URL，有效期1小时）。",
-    responses={
-        200: {"description": "成功"},
-        404: {"description": "文件不存在"},
-    },
-)
+@router.get("/{file_id}/preview", summary="预览文件")
 async def preview_file(
     file_id: UUID,
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> dict[str, str]:
-    """预览文件."""
-    file_service = FileService(db)
-
-    try:
-        url = await file_service.get_preview_url(
-            file_id=file_id,
-            tenant_id=UUID(current_user["tenant_id"]),
-        )
-        return {"preview_url": url}
-    except NotFoundError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": e.code, "message": e.message},
-        ) from e
+) -> StreamingResponse:
+    return await _file_stream_response(
+        file_id=file_id,
+        request=request,
+        current_user=current_user,
+        db=db,
+        disposition="inline",
+    )
 
 
-@router.get(
-    "/{file_id}/download",
-    summary="下载文件",
-    description="获取文件下载URL（预签名URL，有效期1小时）。",
-    responses={
-        200: {"description": "成功"},
-        404: {"description": "文件不存在"},
-    },
-)
+@router.get("/{file_id}/download", summary="下载文件")
 async def download_file(
     file_id: UUID,
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> dict[str, str]:
-    """下载文件."""
-    file_service = FileService(db)
-
-    try:
-        url = await file_service.get_download_url(
-            file_id=file_id,
-            tenant_id=UUID(current_user["tenant_id"]),
-        )
-        return {"download_url": url}
-    except NotFoundError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": e.code, "message": e.message},
-        ) from e
+) -> StreamingResponse:
+    return await _file_stream_response(
+        file_id=file_id,
+        request=request,
+        current_user=current_user,
+        db=db,
+        disposition="attachment",
+    )

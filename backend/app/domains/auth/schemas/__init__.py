@@ -1,51 +1,23 @@
-"""认证schemas模块."""
+"""Authentication request schemas."""
 
 from app.domains.auth.schemas.auth import (
-    AuthSession,
     ForgotPasswordRequest,
-    ForgotPasswordResponse,
-    InvitationResponse,
-    # request
+    InviteUserRequest,
     LoginRequest,
-    LogoutResponse,
-    PermissionMatrix,
     RegisterRequest,
     ResetPasswordRequest,
-    ResetPasswordResponse,
-    RoleDefinition,
-    SendInvitationResponse,
-    SendPasswordResetEmailResponse,
-    TokenResponse,
     UpdateProfileRequest,
-    UserActivityResponse,
-    UserListResponse,
-    UserProjectsResponse,
-    # response
-    UserResponse,
+    UpdateUserRequest,
     UserStatusRequest,
 )
 
 __all__ = [
-    # request
+    "ForgotPasswordRequest",
+    "InviteUserRequest",
     "LoginRequest",
     "RegisterRequest",
-    "ForgotPasswordRequest",
     "ResetPasswordRequest",
     "UpdateProfileRequest",
+    "UpdateUserRequest",
     "UserStatusRequest",
-    # response
-    "UserResponse",
-    "AuthSession",
-    "TokenResponse",
-    "LogoutResponse",
-    "ForgotPasswordResponse",
-    "ResetPasswordResponse",
-    "UserListResponse",
-    "InvitationResponse",
-    "SendInvitationResponse",
-    "SendPasswordResetEmailResponse",
-    "UserProjectsResponse",
-    "UserActivityResponse",
-    "RoleDefinition",
-    "PermissionMatrix",
 ]

@@ -23,7 +23,7 @@ export async function sha256Hex(file: Blob): Promise<string> {
   let hash = 0
   const seed = `${name}:${size}`
   for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0
-  return `demo${hash.toString(16).padStart(56, '0')}`.slice(0, 64)
+  return hash.toString(16).padStart(8, '0').repeat(8)
 }
 
 export function newIdempotencyKey(prefix = 'bid'): string {

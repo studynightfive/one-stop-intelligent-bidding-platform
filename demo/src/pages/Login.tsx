@@ -1,20 +1,25 @@
 import { useState } from 'react'
 import { Alert, Button, Checkbox, Divider, Form, Input, Modal, message } from 'antd'
 import { ArrowRight, Lock, Mail, ShieldCheck, Zap } from 'lucide-react'
-import { currentUser } from '../mock/data'
+import { currentUser as mockCurrentUser } from '../mock/data'
+import { requestPasswordReset, type LoginValues } from '../api/authApi'
+import { shouldUseMocks } from '../api/runtime'
 
-type LoginValues = { email: string; password: string; remember: boolean }
-
-export default function Login({ onLogin }: { onLogin: () => void | Promise<void> }) {
+export default function Login({ onLogin }: { onLogin: (values: LoginValues) => void | Promise<void> }) {
+  const mockMode = shouldUseMocks()
+  const demoAccount = mockMode
+    ? { email: mockCurrentUser.email, password: 'demo123456' }
+    : { email: 'admin@bid-platform.dev', password: 'DemoAdmin123!' }
   const [submitting, setSubmitting] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
   const [forgotForm] = Form.useForm<{ email: string }>()
 
-  const submit = async (_values: LoginValues) => {
+  const submit = async (values: LoginValues) => {
     setSubmitting(true)
     try {
-      await new Promise(resolve => window.setTimeout(resolve, 420))
-      await onLogin()
+      await onLogin(values)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '登录失败，请检查账号与密码')
     } finally {
       setSubmitting(false)
     }
@@ -22,6 +27,7 @@ export default function Login({ onLogin }: { onLogin: () => void | Promise<void>
 
   const sendResetEmail = async () => {
     const { email } = await forgotForm.validateFields()
+    if (!shouldUseMocks()) await requestPasswordReset(email)
     setForgotOpen(false)
     forgotForm.resetFields()
     message.success(`密码重置邮件已发送至 ${email}`)
@@ -48,7 +54,7 @@ export default function Login({ onLogin }: { onLogin: () => void | Promise<void>
             ))}
           </div>
         </div>
-        <div className="z-10 text-xs text-[#64748B]">Demo 演示模式 · 数据仅保存在当前浏览器</div>
+        <div className="z-10 text-xs text-[#64748B]">{mockMode ? 'Demo 模拟模式 · 数据仅保存在当前浏览器' : 'Demo 联调模式 · 操作写入本地服务'}</div>
       </section>
 
       <section className="flex flex-1 items-center justify-center bg-[#F8FAFC] p-6 sm:p-8" aria-label="账号登录">
@@ -60,11 +66,11 @@ export default function Login({ onLogin }: { onLogin: () => void | Promise<void>
 
           <h2 className="mb-1 text-2xl font-semibold text-[#1E293B]">欢迎回来</h2>
           <p className="mb-6 text-sm text-[#64748B]">登录后继续管理投标、评标与企业资源库</p>
-          <Alert className="mb-5" type="info" showIcon message="演示账号已预填，可直接登录体验全部 M3 功能。" />
+          <Alert className="mb-5" type="info" showIcon message={mockMode ? '模拟账号已预填，可直接登录。' : '本地开发管理员已预填，可联调全部真实接口。'} />
 
           <Form<LoginValues>
             layout="vertical"
-            initialValues={{ email: currentUser.email, password: 'demo123456', remember: true }}
+            initialValues={{ ...demoAccount, remember: true }}
             onFinish={submit}
             requiredMark={false}
           >
@@ -76,7 +82,7 @@ export default function Login({ onLogin }: { onLogin: () => void | Promise<void>
             </Form.Item>
             <div className="-mt-2 mb-5 flex items-center justify-between text-xs">
               <Form.Item name="remember" valuePropName="checked" noStyle><Checkbox>保持登录</Checkbox></Form.Item>
-              <Button type="link" size="small" className="!h-auto !p-0" onClick={() => { forgotForm.setFieldValue('email', currentUser.email); setForgotOpen(true) }}>忘记密码？</Button>
+              <Button type="link" size="small" className="!h-auto !p-0" onClick={() => { forgotForm.setFieldValue('email', demoAccount.email); setForgotOpen(true) }}>忘记密码？</Button>
             </div>
             <Button htmlType="submit" type="primary" size="large" block loading={submitting} iconPosition="end" icon={<ArrowRight size={16} />}>
               登录
@@ -84,8 +90,8 @@ export default function Login({ onLogin }: { onLogin: () => void | Promise<void>
           </Form>
 
           <Divider plain className="!my-5 !text-xs">演示快捷入口</Divider>
-          <Button size="large" block disabled={submitting} onClick={() => void submit({ email: currentUser.email, password: 'demo123456', remember: true })}>直接进入演示</Button>
-          <p className="mt-6 text-center text-xs text-[#64748B]">{currentUser.company} · {currentUser.role} · {currentUser.name}</p>
+          <Button size="large" block disabled={submitting} onClick={() => void submit({ ...demoAccount, remember: true })}>直接进入演示</Button>
+          <p className="mt-6 text-center text-xs text-[#64748B]">{mockMode ? `${mockCurrentUser.company} · ${mockCurrentUser.role} · ${mockCurrentUser.name}` : '本地开发环境 · 管理员 · 演示管理员'}</p>
         </div>
       </section>
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Tag, Progress, Tooltip, Avatar, Segmented, Empty, Input, Select, Dropdown, Modal, Pagination, message } from 'antd'
 import {
@@ -27,6 +27,14 @@ import {
   BidTimeoutState,
 } from '../components/BidPageStates'
 import { BidUiStateSwitcher } from '../components/BidUiStateSwitcher'
+import { shouldUseMocks } from '../../../api/runtime'
+import {
+  archiveBidTask,
+  cloneBidTask,
+  fetchBidMaterials,
+  fetchBidTaskStats,
+  type BidTaskStats,
+} from '../adapters/bidWorkflowApi'
 
 const boardColumns = BID_BOARD_COLUMNS
 const statusColors = BID_STATUS_COLORS
@@ -34,6 +42,7 @@ const statusColors = BID_STATUS_COLORS
 export default function DashboardView() {
   const navigate = useNavigate()
   const { bidTasks: tasks, addBidTask, updateBidTask, getTaskMaterials } = useDemo()
+  const mockMode = shouldUseMocks()
   const [view, setView] = useState<string>('table')
   const [filter, setFilter] = useState<string>('all')
   const [keyword, setKeyword] = useState('')
@@ -41,6 +50,7 @@ export default function DashboardView() {
   const [quickFilter, setQuickFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [serverStats, setServerStats] = useState<BidTaskStats | null>(null)
   const { status: uiStatus, override, setUiOverride, retry } = useBidUiState({ bootstrapMs: 300 })
 
   useEffect(() => {
@@ -61,13 +71,34 @@ export default function DashboardView() {
   }), [page, pageSize, keyword, filter, assigneeFilter, quickFilter])
 
   const listDepsKey = JSON.stringify(listQuery)
-  const { data: pagedTasks, meta: pageMeta, loading: listLoading } = usePagedBidTasks(listQuery, listDepsKey)
+  const { data: pagedTasks, meta: pageMeta, loading: listLoading, error: listError, reload } = usePagedBidTasks(listQuery, listDepsKey)
 
-  const filteredTasks = useMemo(
+  const reloadStats = useCallback(async () => {
+    if (mockMode) return
+    try {
+      setServerStats(await fetchBidTaskStats())
+    } catch {
+      setServerStats(null)
+    }
+  }, [mockMode])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void reloadStats() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [reloadStats])
+
+  const mockFilteredTasks = useMemo(
     () => filterTasksForListQuery(tasks as BidTaskViewModel[], { ...listQuery, page: 1, pageSize: 1000 }),
     [tasks, listQuery],
   )
-  const counts = buildDashboardStats(tasks)
+  const visibleTasks = mockMode ? mockFilteredTasks : pagedTasks
+  const mockCounts = buildDashboardStats(tasks)
+  const pageCounts = buildDashboardStats(pagedTasks)
+  const counts = mockMode
+    ? mockCounts
+    : serverStats
+      ? { ...pageCounts, ...serverStats, archived: 0 }
+      : pageCounts
   const stats = [
     { label: '总任务数', value: counts.total, icon: ClipboardList, color: '#2563EB', bg: '#EFF6FF', filter: 'all' },
     { label: '进行中', value: counts.active, icon: Clock, color: '#D97706', bg: '#FFFBEB', filter: 'active' },
@@ -75,7 +106,12 @@ export default function DashboardView() {
     { label: '已完成', value: counts.completed, icon: FileOutput, color: '#16A34A', bg: '#F0FDF4', filter: 'completed' },
   ]
 
-  const assignees = Array.from(new Set(tasks.map(task => task.assignee)))
+  const assignees = useMemo(() => {
+    const source = mockMode ? tasks : pagedTasks
+    const entries = source.map(task => ({ value: mockMode ? task.assignee : task.assigneeId || '', label: task.assignee }))
+      .filter(item => item.value)
+    return Array.from(new Map(entries.map(item => [item.value, item])).values())
+  }, [mockMode, tasks, pagedTasks])
 
   const resetFilters = () => {
     setFilter('all')
@@ -85,35 +121,60 @@ export default function DashboardView() {
     setPage(1)
   }
 
-  const exportTasks = (items = filteredTasks) => {
+  const exportTasks = (items = visibleTasks) => {
     downloadTableAsCsv('投标项目清单.csv', ['项目名称', '招标编号', '招标方', '截止日期', '状态', '负责人', '综合进度', '缺失材料'], items.map(task => [
       task.projectName, task.tenderNo, task.tenderEntity, task.deadline, statusMap[task.status]?.label || task.status, task.assignee, `${task.progress}%`, task.materialMissing,
     ]))
     message.success(`已导出 ${items.length} 个项目`)
   }
 
-  const copyTask = (task: any) => {
-    const taskId = `TASK-${dayjs().format('YYYYMMDD-HHmmss')}`
-    addBidTask({ ...task, id: taskId, projectName: `${task.projectName}（副本）`, status: 'parsing', currentStep: 1, progress: 5, createdAt: dayjs().format('YYYY-MM-DD') }, getTaskMaterials(task.id))
-    message.success('项目副本已创建')
+  const copyTask = async (task: BidTaskViewModel) => {
+    try {
+      if (mockMode) {
+        const taskId = `TASK-${dayjs().format('YYYYMMDD-HHmmss')}`
+        addBidTask({ ...task, id: taskId, projectName: `${task.projectName}（副本）`, status: 'parsing', currentStep: 1, progress: 5, createdAt: dayjs().format('YYYY-MM-DD') }, getTaskMaterials(task.id))
+      } else {
+        await cloneBidTask(task.id, `${task.projectName}（副本）`)
+        await Promise.all([reload(), reloadStats()])
+      }
+      message.success('项目副本已创建')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '项目复制失败')
+    }
   }
 
-  const archiveTask = (task: any) => {
+  const archiveTask = (task: BidTaskViewModel) => {
     Modal.confirm({
       title: `归档「${task.projectName}」？`,
       content: '归档后默认不在工作台列表展示，可从“已归档”筛选查看。',
       okText: '确认归档',
       okButtonProps: { danger: true },
       cancelText: '取消',
-      onOk: () => {
-        updateBidTask(task.id, { status: 'archived' })
-        message.success('项目已归档')
+      onOk: async () => {
+        try {
+          if (mockMode) updateBidTask(task.id, { status: 'archived' })
+          else {
+            await archiveBidTask(task.id, '投标工作已完成，由负责人归档')
+            await Promise.all([reload(), reloadStats()])
+          }
+          message.success('项目已归档')
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '项目归档失败')
+        }
       },
     })
   }
 
-  const showMissingMaterials = (task: any) => {
-    const missing = getTaskMaterials(task.id).filter(item => item.status === 'missing')
+  const showMissingMaterials = async (task: BidTaskViewModel) => {
+    let missing: any[]
+    try {
+      missing = mockMode
+        ? getTaskMaterials(task.id).filter(item => item.status === 'missing')
+        : await fetchBidMaterials(task.id, { status: 'missing' })
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '缺失材料加载失败')
+      return
+    }
     Modal.info({
       title: `${task.projectName} · 缺失材料`,
       width: 560,
@@ -128,21 +189,19 @@ export default function DashboardView() {
 
   const shell = (body: ReactNode) => (
     <div className="p-6" data-testid={BID_TEST_IDS.dashboard}>
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-xs text-[#94A3B8]">异常态预览（M1 本地，待真实 API 错误映射后移除）</div>
-        <BidUiStateSwitcher value={override} onChange={setUiOverride} />
-      </div>
+      {mockMode && <div className="flex items-center justify-between mb-4"><div className="text-xs text-[#94A3B8]">演示异常态预览</div><BidUiStateSwitcher value={override} onChange={setUiOverride} /></div>}
       {body}
     </div>
   )
 
-  if (uiStatus === 'loading') return shell(<BidLoadingState tip="正在加载投标工作台…" />)
-  if (uiStatus === 'error') return shell(<BidErrorState onRetry={retry} />)
-  if (uiStatus === 'forbidden') return shell(<BidForbiddenState onBack={() => navigate('/dashboard')} />)
-  if (uiStatus === 'timeout') return shell(<BidTimeoutState onRetry={retry} />)
-  if (uiStatus === 'conflict') return shell(<BidConflictState onRetry={retry} />)
-  if (uiStatus === 'not_found') return shell(<BidNotFoundState onBack={() => navigate('/dashboard')} />)
-  if (uiStatus === 'empty') {
+  const effectiveUiStatus = mockMode ? uiStatus : listLoading ? 'loading' : listError ? 'error' : 'ready'
+  if (effectiveUiStatus === 'loading') return shell(<BidLoadingState tip="正在加载投标工作台…" />)
+  if (effectiveUiStatus === 'error') return shell(<BidErrorState onRetry={() => void reload()} message={listError || undefined} />)
+  if (effectiveUiStatus === 'forbidden') return shell(<BidForbiddenState onBack={() => navigate('/dashboard')} />)
+  if (effectiveUiStatus === 'timeout') return shell(<BidTimeoutState onRetry={retry} />)
+  if (effectiveUiStatus === 'conflict') return shell(<BidConflictState onRetry={retry} />)
+  if (effectiveUiStatus === 'not_found') return shell(<BidNotFoundState onBack={() => navigate('/dashboard')} />)
+  if (effectiveUiStatus === 'empty') {
     return shell(
       <BidEmptyState
         description="当前没有投标任务，可新建任务开始七步闭环。"
@@ -161,7 +220,7 @@ export default function DashboardView() {
           <p className="text-sm text-[#64748B] mt-0.5">管理所有投标项目，跟踪进度和任务状态</p>
         </div>
         <div className="flex items-center gap-2">
-          <BidUiStateSwitcher value={override} onChange={setUiOverride} />
+          {mockMode && <BidUiStateSwitcher value={override} onChange={setUiOverride} />}
           <Button
             type="primary"
             size="large"
@@ -212,7 +271,7 @@ export default function DashboardView() {
             value={assigneeFilter}
             onChange={value => { setAssigneeFilter(value); resetPage() }}
             className="md:w-36"
-            options={[{ value: 'all', label: '全部负责人' }, ...assignees.map(name => ({ value: name, label: name }))]}
+            options={[{ value: 'all', label: '全部负责人' }, ...assignees]}
           />
           <Segmented
             value={quickFilter}
@@ -222,7 +281,7 @@ export default function DashboardView() {
         </div>
         <div className="flex gap-2">
           <Button icon={<RotateCcw size={14} />} onClick={resetFilters}>重置</Button>
-          <Button icon={<Download size={14} />} onClick={() => exportTasks()}>导出当前结果</Button>
+          <Button icon={<Download size={14} />} onClick={() => exportTasks()}>导出当前页</Button>
         </div>
       </div>
 
@@ -314,7 +373,7 @@ export default function DashboardView() {
                           <span className="text-[#16A34A] font-medium">{task.materialHave}</span>
                           <span className="text-[#94A3B8]">/{task.materialTotal}</span>
                           {task.materialMissing > 0 && (
-                            <button type="button" onClick={event => { event.stopPropagation(); showMissingMaterials(task) }} className="text-[#DC2626] ml-1 hover:underline">({task.materialMissing}缺失)</button>
+                            <button type="button" onClick={event => { event.stopPropagation(); void showMissingMaterials(task) }} className="text-[#DC2626] ml-1 hover:underline">({task.materialMissing}缺失)</button>
                           )}
                         </span>
                       ) : (
@@ -337,13 +396,13 @@ export default function DashboardView() {
                             items: [
                               { key: 'evaluation', label: '发起评标任务', icon: <Gavel size={14} />, disabled: task.status === 'archived' },
                               { key: 'copy', label: '复制项目', icon: <Copy size={14} /> },
-                              { key: 'archive', label: '归档项目', icon: <Archive size={14} />, disabled: task.status === 'archived' },
+                              { key: 'archive', label: '归档项目', icon: <Archive size={14} />, disabled: !['completed'].includes(task.status) },
                               { key: 'export', label: '导出项目概览', icon: <Download size={14} /> },
                             ],
                             onClick: ({ key, domEvent }) => {
                               domEvent.stopPropagation()
                               if (key === 'evaluation') navigate(`/evaluation/create?sourceTask=${task.id}`)
-                              if (key === 'copy') copyTask(task)
+                              if (key === 'copy') void copyTask(task)
                               if (key === 'archive') archiveTask(task)
                               if (key === 'export') exportTasks([task])
                             },
@@ -389,7 +448,7 @@ export default function DashboardView() {
       {view === 'board' && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
           {boardColumns.map(col => {
-            const colTasks = filteredTasks.filter(t => t.status === col.key)
+            const colTasks = visibleTasks.filter(t => t.status === col.key)
             const status = statusMap[col.key]
             return (
               <div key={col.key} className="bg-[#F1F5F9] rounded-xl p-3 min-h-[200px]">
@@ -422,7 +481,7 @@ export default function DashboardView() {
                           <span className="text-[#16A34A] font-medium">{task.materialHave}</span>
                           <span className="text-[#94A3B8]">/{task.materialTotal} 材料</span>
                           {task.materialMissing > 0 && (
-                            <button type="button" onClick={event => { event.stopPropagation(); showMissingMaterials(task) }}><Tag color="red" className="ml-2 text-xs border-0 rounded hover:underline">{task.materialMissing}缺失</Tag></button>
+                            <button type="button" onClick={event => { event.stopPropagation(); void showMissingMaterials(task) }}><Tag color="red" className="ml-2 text-xs border-0 rounded hover:underline">{task.materialMissing}缺失</Tag></button>
                           )}
                         </div>
                       )}

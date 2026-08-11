@@ -1,47 +1,94 @@
-"""文件schemas."""
+"""Contract-aligned schemas for resumable file uploads."""
+
+from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class FileUploadSessionResponse(BaseModel):
-    """上传会话响应."""
+class ContractModel(BaseModel):
+    """Accept camelCase at the HTTP boundary while keeping Python snake_case."""
 
-    id: UUID = Field(..., description="会话ID")
-    file_name: str = Field(..., description="文件名")
-    size_bytes: int = Field(..., description="文件大小(字节)")
-    part_size_bytes: int = Field(..., description="分片大小(字节)")
-    total_parts: int = Field(..., description="总分片数")
-    uploaded_parts: list[dict[str, Any]] = Field(default_factory=list, description="已上传分片列表")
-    status: str = Field(..., description="状态")
-    expires_at: datetime = Field(..., description="过期时间")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
-class PartUploadResponse(BaseModel):
-    """分片上传响应."""
+class CreateUploadSessionRequest(ContractModel):
+    file_name: str = Field(alias="fileName", min_length=1, max_length=255)
+    mime_type: str = Field(alias="mimeType", min_length=1, max_length=100)
+    size_bytes: int = Field(alias="sizeBytes", ge=1, le=200 * 1024 * 1024)
+    sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    purpose: Literal[
+        "tender",
+        "bidMaterial",
+        "bidIllustration",
+        "qualification",
+        "fragment",
+        "supplierMaterial",
+        "template",
+    ]
+    resource_id: UUID | None = Field(default=None, alias="resourceId")
 
-    part_number: int = Field(..., description="分片编号")
-    etag: str = Field(..., description="分片ETag")
+    @field_validator("file_name")
+    @classmethod
+    def validate_file_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            raise ValueError("fileName must be a plain file name without path segments")
+        return name
+
+    @field_validator("sha256")
+    @classmethod
+    def normalize_sha256(cls, value: str) -> str:
+        return value.lower()
 
 
-class CompleteUploadRequest(BaseModel):
-    """完成上传请求."""
+class UploadPart(ContractModel):
+    part_number: int = Field(alias="partNumber", ge=1)
+    etag: str = Field(min_length=1)
 
-    parts: list[dict[str, Any]] = Field(..., description="分片信息列表")
+    @field_validator("etag")
+    @classmethod
+    def normalize_etag(cls, value: str) -> str:
+        return value.strip().strip('"')
 
 
-class FileResponse(BaseModel):
-    """文件响应."""
+class CompleteUploadRequest(ContractModel):
+    parts: list[UploadPart] = Field(min_length=1)
 
-    id: UUID = Field(..., description="文件ID")
-    file_name: str = Field(..., description="文件名")
-    mime_type: str = Field(..., description="MIME类型")
-    size_bytes: int = Field(..., description="文件大小")
-    sha256: str = Field(..., description="SHA-256哈希")
-    scan_status: str = Field(..., description="扫描状态")
-    preview_url: str | None = Field(None, description="预览URL")
-    download_url: str | None = Field(None, description="下载URL")
-    created_at: datetime = Field(..., description="创建时间")
+
+class FileUploadSessionResponse(ContractModel):
+    id: UUID
+    file_name: str = Field(alias="fileName")
+    size_bytes: int = Field(alias="sizeBytes", ge=1)
+    part_size_bytes: int = Field(alias="partSizeBytes", ge=1)
+    total_parts: int = Field(alias="totalParts", ge=1)
+    uploaded_parts: list[UploadPart] = Field(alias="uploadedParts", default_factory=list)
+    status: Literal[
+        "created",
+        "uploading",
+        "verifying",
+        "scanning",
+        "completed",
+        "cancelled",
+        "failed",
+    ]
+    expires_at: datetime = Field(alias="expiresAt")
+
+
+class PartUploadResponse(UploadPart):
+    """Response returned after a part has been persisted to object storage."""
+
+
+class FileResponse(ContractModel):
+    id: UUID
+    file_name: str = Field(alias="fileName")
+    mime_type: str = Field(alias="mimeType")
+    size_bytes: int = Field(alias="sizeBytes", ge=0)
+    sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    scan_status: Literal["pending", "clean", "infected", "failed"] = Field(alias="scanStatus")
+    preview_url: str | None = Field(default=None, alias="previewUrl")
+    download_url: str | None = Field(default=None, alias="downloadUrl")
+    created_at: datetime = Field(alias="createdAt")

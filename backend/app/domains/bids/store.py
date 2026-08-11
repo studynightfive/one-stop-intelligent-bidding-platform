@@ -32,6 +32,9 @@ class BidStore:
         self.job_results: dict[str, tuple[str, str, str, Any]] = {}
         self.job_result_lock = asyncio.Lock()
         self.operation_locks: dict[str, asyncio.Lock] = {}
+        from app.domains.bids.demo_seed import seed_demo_bid_store
+
+        seed_demo_bid_store(self)
 
     def operation_lock(self, key: str) -> asyncio.Lock:
         lock = self.operation_locks.get(key)

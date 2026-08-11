@@ -15,7 +15,7 @@ function Probe() {
 describe('useBidUiState', () => {
   it('bootstraps from loading to ready', async () => {
     render(
-      <MemoryRouter initialEntries={['/dashboard']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/dashboard']}>
         <Routes>
           <Route path="/dashboard" element={<Probe />} />
         </Routes>
@@ -27,7 +27,7 @@ describe('useBidUiState', () => {
 
   it('honors ui query override', () => {
     render(
-      <MemoryRouter initialEntries={['/dashboard?ui=error']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/dashboard?ui=error']}>
         <Routes>
           <Route path="/dashboard" element={<Probe />} />
         </Routes>

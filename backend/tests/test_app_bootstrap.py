@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,20 @@ def test_models_share_the_central_declarative_base() -> None:
         "portal_sessions",
         "score_items",
         "evaluation_reports",
+        "bid_tasks",
+        "bid_task_assignments",
+        "bid_materials",
+        "bid_tender_requirements",
+        "bid_documents",
+        "bid_document_versions",
+        "bid_review_reports",
+        "bid_review_findings",
+        "qualifications",
+        "qualification_versions",
+        "qualification_import_jobs",
+        "fragments",
+        "fragment_versions",
+        "fragment_references",
     }
     assert expected_tables <= set(Base.metadata.tables)
 
@@ -86,15 +101,42 @@ def test_merged_domain_routes_are_registered() -> None:
         "/api/v1/health/live",
         "/api/v1/auth/login",
         "/api/v1/users",
+        "/api/v1/roles",
+        "/api/v1/permissions/matrix",
         "/api/v1/files/upload-sessions",
         "/api/v1/jobs/{job_id}",
         "/api/v1/notifications",
         "/api/v1/settings/model-providers",
         "/api/v1/audit-events",
         "/api/v1/global-search",
+        "/api/v1/bid-tasks",
+        "/api/v1/qualifications",
+        "/api/v1/fragments",
         "/api/v1/evaluations",
+        "/api/v1/evaluations/{evaluationId}/audit-events",
         "/api/v1/portal/session/exchange",
     } <= route_paths
+
+
+def test_runtime_routes_match_every_contract_operation() -> None:
+    methods = {"get", "post", "put", "patch", "delete"}
+
+    def normalize(path: str) -> str:
+        without_prefix = path.removeprefix("/api/v1")
+        return re.sub(r"\{[^}]+\}", "{}", without_prefix)
+
+    contract = main._load_contract()
+    contract_operations = {
+        (method, normalize(path)) for path, item in contract["paths"].items() for method in item if method in methods
+    }
+    runtime_operations = {
+        (method.lower(), normalize(route.path))
+        for route in app.routes
+        for method in getattr(route, "methods", ())
+        if method.lower() in methods and route.path.startswith("/api/v1") and route.path != "/api/v1/openapi.json"
+    }
+
+    assert runtime_operations == contract_operations
 
 
 def test_liveness_route_is_available() -> None:

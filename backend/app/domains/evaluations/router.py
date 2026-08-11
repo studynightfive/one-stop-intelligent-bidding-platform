@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Mapping
+from datetime import datetime
 from typing import Any, TypeVar, cast
 
-from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 
 from app.domains.evaluations.container import M6Container
 from app.domains.evaluations.errors import DomainError
@@ -133,6 +134,37 @@ async def get_evaluation(
 ) -> Response:
     data = await _run(request, container.evaluations.get_detail(actor, evaluationId))
     return success(data, request=request)
+
+
+@router.get("/evaluations/{evaluationId}/audit-events")
+async def list_evaluation_audit_events(
+    request: Request,
+    evaluationId: str,
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=20, ge=1, le=100),
+    actorFilter: str | None = Query(default=None, alias="actor"),
+    action: str | None = None,
+    resource: str | None = None,
+    dateFrom: datetime | None = None,
+    dateTo: datetime | None = None,
+    container: M6Container = Depends(get_container),
+    actor: AuthPrincipal = Depends(get_actor),
+) -> Response:
+    data, meta = await _run(
+        request,
+        container.evaluations.list_audit_events(
+            actor,
+            evaluationId,
+            page=page,
+            page_size=pageSize,
+            actor_filter=actorFilter,
+            action=action,
+            resource=resource,
+            date_from=dateFrom,
+            date_to=dateTo,
+        ),
+    )
+    return success(data, request=request, meta=meta)
 
 
 @router.patch("/evaluations/{evaluationId}")
@@ -606,6 +638,13 @@ async def download_report(
         if report.evaluation_id != evaluationId:
             raise DomainError(code="NOT_FOUND", message="报告不存在")
         _ = container.store.get_evaluation(evaluationId, tenant_id=actor.tenant_id)
+        if report.content is not None:
+            return binary_file_response(
+                content=report.content,
+                file_name=report.file_name or f"evaluation-report-{report.id[:8]}.{report.format}",
+                content_type=report.mime_type or "application/octet-stream",
+                sha256=report.sha256,
+            )
         file_obj = await container.scoring.files.get_file(tenant_id=actor.tenant_id, file_id=report.file_id)
         if file_obj.download_url:
             return binary_redirect(file_obj.download_url, sha256=file_obj.sha256)

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from typing import Any, cast
 
+from app.domains.documents.generator import build_bid_docx
 from app.domains.evaluations.access import require_owner, require_reviewer, require_viewer
 from app.domains.evaluations.entities import (
     EvaluationReportEntity,
@@ -17,12 +21,15 @@ from app.domains.evaluations.errors import conflict, not_found, validation_error
 from app.domains.evaluations.ids import new_id
 from app.domains.evaluations.mappers import report_dict, risk_dict, score_dict
 from app.domains.evaluations.money import format_score, parse_score, weighted_score
+from app.domains.evaluations.pdf_util import build_simple_pdf
 from app.domains.evaluations.ports import (
     AuditEventInput,
     AuditServicePort,
     AuthPrincipal,
+    FileRefSnapshot,
     FileServicePort,
     JobDispatcherPort,
+    JobRefSnapshot,
 )
 from app.domains.evaluations.state_machine import (
     assert_evaluation_transition,
@@ -38,6 +45,41 @@ def _now() -> datetime:
 
 def _unwrap(value: Any) -> Any:
     return getattr(value, "root", value)
+
+
+def _job_ref_dict(job: JobRefSnapshot) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "id": job.id,
+        "type": job.type,
+        "status": job.status,
+        "progressPercent": job.progress_percent,
+        "createdAt": job.created_at.isoformat().replace("+00:00", "Z"),
+        "currentStep": job.current_step,
+    }
+    if job.result is not None:
+        data["result"] = job.result
+    if job.error is not None:
+        data["error"] = job.error
+    return data
+
+
+def _worker_output(job: JobRefSnapshot) -> dict[str, Any] | None:
+    if job.status != "succeeded" or not isinstance(job.result, Mapping):
+        return None
+    output = job.result.get("output")
+    return dict(output) if isinstance(output, Mapping) else None
+
+
+def _confidence(value: Any, *, default: float = 0.75) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_file_stem(value: str) -> str:
+    stem = re.sub(r'[\\/:*?"<>|]+', "-", value).strip(" .-")
+    return stem[:80] or "evaluation-report"
 
 
 class ScoringService:
@@ -57,22 +99,69 @@ class ScoringService:
     async def start_material_check(self, actor: AuthPrincipal, evaluation_id: str) -> dict[str, Any]:
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_reviewer(actor, entity)
+        submission_summary = []
+        for supplier in entity.suppliers:
+            supplier_submissions = self.store.list_submissions(evaluation_id=evaluation_id, supplier_id=supplier.id)
+            submission_summary.append(
+                {
+                    "supplierId": supplier.id,
+                    "supplierName": supplier.name,
+                    "materialIds": [item.material_id for item in supplier_submissions if item.status != "replaced"],
+                }
+            )
         job = await self.jobs.enqueue(
             tenant_id=actor.tenant_id,
             job_type="evaluation.material_check",
-            payload={"evaluationId": evaluation_id},
+            payload={
+                "evaluationId": evaluation_id,
+                "requiredMaterials": [
+                    {"id": item.id, "name": item.name, "required": item.required} for item in entity.materials
+                ],
+                "submissions": submission_summary,
+            },
             created_by=actor.user_id,
         )
-        check = MaterialCheckEntity(id=new_id(), evaluation_id=evaluation_id, status="queued", rows=[])
+        output = _worker_output(job)
+        rows: list[dict[str, Any]] = []
+        if output is not None:
+            missing_hints = [str(item).casefold() for item in output.get("missing", []) if str(item).strip()]
+            completeness = _confidence(output.get("completeness"), default=0.8)
+            for supplier in entity.suppliers:
+                submitted_material_ids = {
+                    item.material_id
+                    for item in self.store.list_submissions(evaluation_id=evaluation_id, supplier_id=supplier.id)
+                    if item.status != "replaced"
+                }
+                for index, material in enumerate(sorted(entity.materials, key=lambda item: item.sort_order)):
+                    inferred_provided = (
+                        material.id in submitted_material_ids or index < supplier.submitted_material_count
+                    )
+                    hinted_missing = any(
+                        hint in material.name.casefold() or material.name.casefold() in hint for hint in missing_hints
+                    )
+                    provided = inferred_provided and not hinted_missing
+                    rows.append(
+                        {
+                            "supplierId": supplier.id,
+                            "materialId": material.id,
+                            "result": "provided" if provided else "missing",
+                            "evidence": [
+                                "已绑定供应商提交文件"
+                                if material.id in submitted_material_ids
+                                else "根据供应商提交计数与 AI 完整性结果核验",
+                            ],
+                            "confidence": completeness,
+                        }
+                    )
+        check = MaterialCheckEntity(
+            id=new_id(),
+            evaluation_id=evaluation_id,
+            status="succeeded" if output is not None else "queued",
+            rows=rows,
+            completed_at=_now() if output is not None else None,
+        )
         self.store.save_material_check(check)
-        return {
-            "id": job.id,
-            "type": job.type,
-            "status": job.status,
-            "progressPercent": job.progress_percent,
-            "createdAt": job.created_at.isoformat().replace("+00:00", "Z"),
-            "currentStep": job.current_step,
-        }
+        return _job_ref_dict(job)
 
     async def latest_material_check(self, actor: AuthPrincipal, evaluation_id: str) -> dict[str, Any]:
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
@@ -93,14 +182,69 @@ class ScoringService:
     async def start_risk_check(self, actor: AuthPrincipal, evaluation_id: str) -> dict[str, Any]:
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_reviewer(actor, entity)
+        rounds = self.store.list_rounds(evaluation_id=evaluation_id)
         job = await self.jobs.enqueue(
             tenant_id=actor.tenant_id,
             job_type="evaluation.risk_check",
-            payload={"evaluationId": evaluation_id},
+            payload={
+                "evaluationId": evaluation_id,
+                "suppliers": [
+                    {
+                        "id": supplier.id,
+                        "name": supplier.name,
+                        "status": supplier.status,
+                        "currentQuote": str(supplier.current_quote) if supplier.current_quote is not None else None,
+                    }
+                    for supplier in entity.suppliers
+                ],
+                "history": [
+                    {
+                        "roundId": price_round.id,
+                        "roundNumber": price_round.round_number,
+                        "quotes": [
+                            {"supplierId": quote.supplier_id, "amount": str(quote.amount)}
+                            for quote in self.store.list_quotes(
+                                evaluation_id=evaluation_id,
+                                round_id=price_round.id,
+                            )
+                        ],
+                    }
+                    for price_round in rounds
+                ],
+            },
             created_by=actor.user_id,
         )
-        # 占位风险，等待 M7 JobResult 回写；测试可直接注入
-        if not self.store.list_risks(evaluation_id=evaluation_id):
+        output = _worker_output(job)
+        findings = output.get("findings") if output is not None else None
+        if isinstance(findings, list) and entity.suppliers:
+            supplier_ids = {supplier.id for supplier in entity.suppliers}
+            for index, raw in enumerate(findings):
+                if not isinstance(raw, Mapping):
+                    continue
+                supplier_id = str(raw.get("supplierId") or "")
+                if supplier_id not in supplier_ids:
+                    supplier_id = entity.suppliers[index % len(entity.suppliers)].id
+                severity = str(raw.get("severity") or "warning").lower()
+                if severity not in {"info", "warning", "high", "critical"}:
+                    severity = "warning"
+                evidence = raw.get("evidence")
+                if not isinstance(evidence, list):
+                    evidence = [str(evidence)] if evidence else ["AI 风险识别结果"]
+                self.store.save_risk(
+                    RiskFindingEntity(
+                        id=new_id(),
+                        evaluation_id=evaluation_id,
+                        supplier_id=supplier_id,
+                        type=str(raw.get("type") or "evaluation_risk"),
+                        severity=severity,
+                        title=str(raw.get("title") or raw.get("type") or "AI 识别风险"),
+                        evidence=[str(item) for item in evidence if str(item).strip()],
+                        decision="pending",
+                        ai_confidence=_confidence(raw.get("confidence")),
+                    )
+                )
+        # 异步队列模式保留可见占位项，等待外部 Worker 回写。
+        if output is None and not self.store.list_risks(evaluation_id=evaluation_id):
             for supplier in entity.suppliers:
                 self.store.save_risk(
                     RiskFindingEntity(
@@ -115,14 +259,7 @@ class ScoringService:
                         ai_confidence=0.5,
                     )
                 )
-        return {
-            "id": job.id,
-            "type": job.type,
-            "status": job.status,
-            "progressPercent": job.progress_percent,
-            "createdAt": job.created_at.isoformat().replace("+00:00", "Z"),
-            "currentStep": job.current_step,
-        }
+        return _job_ref_dict(job)
 
     async def list_risks(
         self,
@@ -184,23 +321,52 @@ class ScoringService:
     async def start_ai_scoring(self, actor: AuthPrincipal, evaluation_id: str) -> dict[str, Any]:
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_reviewer(actor, entity)
-        if entity.status in {"collecting", "pending"}:
-            assert_evaluation_transition(entity.status, "ai_review" if entity.status == "pending" else "pending")
-            # collecting -> pending -> ai_review 简化：直接进入 ai_review（测试可先手动推进）
-        if entity.status == "pending":
-            assert_evaluation_transition("pending", "ai_review")
-            entity.status = "ai_review"
-            entity.current_step = evaluation_step_for("ai_review")
-            entity.progress_percent = evaluation_progress_for("ai_review")
-            entity.updated_at = _now()
-            self.store.save_evaluation(entity)
+        if entity.status not in {"collecting", "pending"}:
+            raise conflict("当前状态不可发起 AI 评分", currentStatus=entity.status)
+        if entity.status == "collecting":
+            assert_evaluation_transition("collecting", "pending")
+            entity.status = "pending"
+        assert_evaluation_transition("pending", "ai_review")
+        entity.status = "ai_review"
+        entity.current_step = evaluation_step_for("ai_review")
+        entity.progress_percent = evaluation_progress_for("ai_review")
+        entity.updated_at = _now()
+        self.store.save_evaluation(entity)
         job = await self.jobs.enqueue(
             tenant_id=actor.tenant_id,
             job_type="evaluation.ai_scoring",
-            payload={"evaluationId": evaluation_id},
+            payload={
+                "evaluationId": evaluation_id,
+                "scoringCriteria": [
+                    {
+                        "id": criterion.id,
+                        "name": criterion.name,
+                        "category": criterion.category,
+                        "maxScore": str(criterion.max_score),
+                        "weightPercent": str(criterion.weight_percent),
+                        "description": criterion.description,
+                    }
+                    for criterion in entity.criteria
+                ],
+                "supplierResponse": [
+                    {
+                        "id": supplier.id,
+                        "name": supplier.name,
+                        "status": supplier.status,
+                        "submittedMaterialCount": supplier.submitted_material_count,
+                        "requiredMaterialCount": supplier.required_material_count,
+                        "currentQuote": str(supplier.current_quote) if supplier.current_quote is not None else None,
+                    }
+                    for supplier in entity.suppliers
+                ],
+            },
             created_by=actor.user_id,
         )
-        # 占位 AI 分，待 M7 回写；保证人工改分链路可测
+        output = _worker_output(job)
+        raw_scores = output.get("scores") if output is not None else None
+        ai_scores = (
+            [dict(item) for item in raw_scores if isinstance(item, Mapping)] if isinstance(raw_scores, list) else []
+        )
         for supplier in entity.suppliers:
             if supplier.status == "disqualified":
                 continue
@@ -213,25 +379,36 @@ class ScoringService:
                     key_exists = False
                 if key_exists:
                     continue
-                ai = (criterion.max_score * Decimal("0.70")).quantize(Decimal("0.01"))
+                matched = next(
+                    (
+                        item
+                        for item in ai_scores
+                        if str(item.get("criterionName") or "").casefold() in criterion.name.casefold()
+                        or criterion.name.casefold() in str(item.get("criterionName") or "").casefold()
+                    ),
+                    None,
+                )
+                try:
+                    ai = Decimal(str(matched.get("score"))).quantize(Decimal("0.01")) if matched is not None else None
+                except (InvalidOperation, TypeError, ValueError):
+                    ai = None
+                if ai is None:
+                    ai = (criterion.max_score * Decimal("0.70")).quantize(Decimal("0.01"))
+                ai = min(max(ai, Decimal("0")), criterion.max_score)
+                basis = (
+                    str(matched.get("basis") or "AI 建议，待人工确认") if matched is not None else "AI 建议，待人工确认"
+                )
                 self.store.save_score(
                     ScoreItemEntity(
                         evaluation_id=evaluation_id,
                         supplier_id=supplier.id,
                         criterion_id=criterion.id,
                         ai_score=ai,
-                        ai_basis="AI 建议，待人工确认",
+                        ai_basis=basis,
                         final_score=ai,
                     )
                 )
-        return {
-            "id": job.id,
-            "type": job.type,
-            "status": job.status,
-            "progressPercent": job.progress_percent,
-            "createdAt": job.created_at.isoformat().replace("+00:00", "Z"),
-            "currentStep": job.current_step,
-        }
+        return _job_ref_dict(job)
 
     async def list_scores(
         self, actor: AuthPrincipal, evaluation_id: str, *, supplier_id: str | None = None, category: str | None = None
@@ -391,27 +568,100 @@ class ScoringService:
     async def start_report(self, actor: AuthPrincipal, evaluation_id: str, formats: list[str]) -> dict[str, Any]:
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_reviewer(actor, entity)
+        if entity.status not in {"human_review", "completed"}:
+            raise conflict("当前状态不可生成评标报告", currentStatus=entity.status)
+        normalized_formats = list(dict.fromkeys(str(item).lower() for item in formats))
+        if not normalized_formats or any(item not in {"docx", "pdf"} for item in normalized_formats):
+            raise validation_error("报告格式仅支持 docx/pdf")
+        ranking = await self.ranking(actor, evaluation_id)
+        risks = [risk_dict(item) for item in self.store.list_risks(evaluation_id=evaluation_id)]
         job = await self.jobs.enqueue(
             tenant_id=actor.tenant_id,
             job_type="evaluation.report_generate",
-            payload={"evaluationId": evaluation_id, "formats": formats},
+            payload={
+                "evaluationId": evaluation_id,
+                "projectName": entity.project_name,
+                "ranking": ranking,
+                "risks": risks,
+                "formats": normalized_formats,
+            },
             created_by=actor.user_id,
         )
-        return {
-            "id": job.id,
-            "type": job.type,
-            "status": job.status,
-            "progressPercent": job.progress_percent,
-            "createdAt": job.created_at.isoformat().replace("+00:00", "Z"),
-            "currentStep": job.current_step,
-        }
+        output = _worker_output(job)
+        if output is not None:
+            title = str(output.get("reportTitle") or f"{entity.project_name}评标报告")
+            raw_sections = output.get("sections")
+            sections: list[dict[str, Any]] = []
+            if isinstance(raw_sections, list):
+                for index, raw in enumerate(raw_sections, start=1):
+                    if not isinstance(raw, Mapping):
+                        continue
+                    heading = str(raw.get("heading") or f"第 {index} 章")
+                    body = str(raw.get("body") or "本章节暂无生成内容，请人工复核补充。")
+                    sections.append({"heading": heading, "paragraphs": [{"index": 1, "text": body}]})
+            if not sections:
+                sections = [
+                    {
+                        "heading": "评审结论",
+                        "paragraphs": [{"index": 1, "text": "评标结果已经系统汇总，请评审负责人复核。"}],
+                    }
+                ]
+            for report_format in normalized_formats:
+                if report_format == "docx":
+                    content = build_bid_docx(
+                        title=title,
+                        template_name="标准评标报告模板",
+                        sections=sections,
+                    ).content
+                    mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                else:
+                    lines = [title]
+                    for section in sections:
+                        lines.append(str(section["heading"]))
+                        lines.extend(str(item["text"]) for item in section["paragraphs"])
+                    content = build_simple_pdf(lines)
+                    mime_type = "application/pdf"
+                existing = [
+                    item
+                    for item in self.store.list_reports(evaluation_id=evaluation_id)
+                    if item.format == report_format
+                ]
+                file_id = new_id()
+                report = EvaluationReportEntity(
+                    id=new_id(),
+                    evaluation_id=evaluation_id,
+                    format=report_format,
+                    version_number=max((item.version_number for item in existing), default=0) + 1,
+                    file_id=file_id,
+                    created_by_id=actor.user_id,
+                    created_by_name=actor.name,
+                    created_at=_now(),
+                    file_name=f"{_safe_file_stem(entity.project_name)}-评标报告.{report_format}",
+                    mime_type=mime_type,
+                    size_bytes=len(content),
+                    sha256=sha256(content).hexdigest(),
+                    content=content,
+                )
+                self.store.save_report(report)
+        return _job_ref_dict(job)
 
     async def list_reports(self, actor: AuthPrincipal, evaluation_id: str) -> list[dict[str, Any]]:
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_viewer(actor, entity)
         result = []
         for report in self.store.list_reports(evaluation_id=evaluation_id):
-            file = await self.files.get_file(tenant_id=actor.tenant_id, file_id=report.file_id)
+            if report.content is not None:
+                file = FileRefSnapshot(
+                    id=report.file_id,
+                    file_name=report.file_name or f"evaluation-report.{report.format}",
+                    mime_type=report.mime_type or "application/octet-stream",
+                    size_bytes=report.size_bytes or len(report.content),
+                    sha256=report.sha256 or sha256(report.content).hexdigest(),
+                    scan_status="clean",
+                    created_at=report.created_at,
+                )
+            else:
+                file = await self.files.get_file(tenant_id=actor.tenant_id, file_id=report.file_id)
             result.append(report_dict(report, file))
         return result
 

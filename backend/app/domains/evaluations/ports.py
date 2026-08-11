@@ -52,6 +52,8 @@ class JobRefSnapshot:
     progress_percent: int
     created_at: datetime
     current_step: str | None = None
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +97,27 @@ class AuditEventInput:
     target_id: str | None = None
     changes: tuple[dict[str, Any], ...] = ()
     request_id: str = ""
+    ip_address: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEventSnapshot:
+    """Read model shared by M6 and the M4 append-only audit service."""
+
+    id: str
+    tenant_id: str
+    aggregate_type: str
+    aggregate_id: str
+    actor_type: Literal["user", "supplier", "system"]
+    actor_id: str | None
+    actor_name: str
+    action: str
+    summary: str
+    request_id: str
+    created_at: datetime
+    target_type: str | None = None
+    target_id: str | None = None
+    changes: tuple[dict[str, Any], ...] = ()
     ip_address: str | None = None
 
 
@@ -151,12 +174,28 @@ class NotificationServicePort(Protocol):
 class AuditServicePort(Protocol):
     async def append(self, event: AuditEventInput) -> None: ...
 
+    async def list_events(
+        self,
+        *,
+        tenant_id: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        actor: str | None = None,
+        action: str | None = None,
+        resource: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[AuditEventSnapshot], int]: ...
+
 
 @dataclass
 class RecordingPorts:
     """测试用端口集合：记录调用，不触达真实基础设施。"""
 
     audits: list[AuditEventInput] = field(default_factory=list)
+    audit_history: list[AuditEventSnapshot] = field(default_factory=list)
     notifications: list[NotificationInput] = field(default_factory=list)
     jobs: list[JobRefSnapshot] = field(default_factory=list)
     files: dict[str, FileRefSnapshot] = field(default_factory=dict)
@@ -216,4 +255,63 @@ class RecordingPorts:
         self.notifications.append(event)
 
     async def append(self, event: AuditEventInput) -> None:
+        from datetime import UTC
+
+        from app.domains.evaluations.ids import new_id
+
         self.audits.append(event)
+        self.audit_history.append(
+            AuditEventSnapshot(
+                id=new_id(),
+                tenant_id=event.tenant_id,
+                aggregate_type=event.aggregate_type,
+                aggregate_id=event.aggregate_id,
+                actor_type=event.actor_type,
+                actor_id=event.actor_id,
+                actor_name=event.actor_name,
+                action=event.action,
+                summary=event.summary,
+                request_id=event.request_id,
+                created_at=datetime.now(UTC),
+                target_type=event.target_type,
+                target_id=event.target_id,
+                changes=event.changes,
+                ip_address=event.ip_address,
+            )
+        )
+
+    async def list_events(
+        self,
+        *,
+        tenant_id: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        actor: str | None = None,
+        action: str | None = None,
+        resource: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[AuditEventSnapshot], int]:
+        items = [
+            item
+            for item in self.audit_history
+            if item.tenant_id == tenant_id
+            and item.aggregate_type == aggregate_type
+            and item.aggregate_id == aggregate_id
+        ]
+        if actor:
+            lowered = actor.casefold()
+            items = [item for item in items if item.actor_id == actor or lowered in item.actor_name.casefold()]
+        if action:
+            items = [item for item in items if item.action == action]
+        if resource:
+            items = [item for item in items if item.target_type == resource]
+        if date_from:
+            items = [item for item in items if item.created_at >= date_from]
+        if date_to:
+            items = [item for item in items if item.created_at <= date_to]
+        items.sort(key=lambda item: item.created_at, reverse=True)
+        total = len(items)
+        return items[offset : offset + limit], total

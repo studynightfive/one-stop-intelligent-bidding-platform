@@ -111,6 +111,8 @@ class ModelRouter:
             "material_match",
             "bid_review",
             "bid_generate",
+            "bid_generate_plan",
+            "bid_generate_paragraph",
             "risk_check",
             "evaluation_check",
             "evaluation_score",

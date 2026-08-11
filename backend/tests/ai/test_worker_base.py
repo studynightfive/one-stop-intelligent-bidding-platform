@@ -177,6 +177,19 @@ def test_run_task_handler_catches_circuit_open() -> None:
     assert result["errorCode"] == "AI_PROVIDER_UNAVAILABLE"
 
 
+def test_run_task_handler_reraises_retryable_provider_error() -> None:
+    from app.ai.errors import ProviderTimeout
+
+    task = _Task()
+
+    def failing(spec, payload):
+        raise ProviderTimeout("temporary timeout", provider="fake")
+
+    handler = run_task_handler(task, failing)
+    with pytest.raises(ProviderTimeout):
+        handler("job-1", {})
+
+
 def test_run_task_handler_rejects_invalid_return() -> None:
     task = _Task()
 

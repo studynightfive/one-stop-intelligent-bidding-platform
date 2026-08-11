@@ -153,7 +153,12 @@ class PricingService:
         idempotency_key: str | None,
     ) -> dict[str, Any]:
         if idempotency_key:
-            existing = self.store.find_quote_by_idempotency(idempotency_key)
+            existing = self.store.find_quote_by_idempotency(
+                evaluation_id=portal.evaluation_id,
+                round_id=round_id,
+                supplier_id=portal.supplier_id,
+                key=idempotency_key,
+            )
             if existing is not None:
                 return quote_dict(existing)
         entity = self.store.get_evaluation(portal.evaluation_id, tenant_id=portal.tenant_id)

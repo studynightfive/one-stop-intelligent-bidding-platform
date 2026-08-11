@@ -1,47 +1,35 @@
-/** M1 bid env — respects repo `VITE_USE_MOCKS` / `VITE_API_BASE_URL` without editing L0 tsconfig. */
+/** Backwards-compatible M1 aliases for the shared runtime configuration. */
 
-export const BID_ACCESS_TOKEN_KEY = 'bid-platform-access-token'
+import { ACCESS_TOKEN_KEY, readAccessToken } from '../../../api/authStorage'
+import { apiBaseUrl, shouldUseMocks } from '../../../api/runtime'
 
-type ViteEnvBag = {
-  VITE_API_BASE_URL?: string
-  VITE_USE_MOCKS?: string
-}
-
-function readViteEnv(): ViteEnvBag {
-  // Avoid depending on vite/client in tsconfig (L0-owned); cast keeps typecheck green.
-  const meta = import.meta as unknown as { env?: ViteEnvBag }
-  return meta.env || {}
-}
+export const BID_ACCESS_TOKEN_KEY = ACCESS_TOKEN_KEY
 
 export function getBidApiBaseUrl(): string {
-  const raw = readViteEnv().VITE_API_BASE_URL || 'http://127.0.0.1:8210/api/v1'
-  return raw.replace(/\/$/, '')
+  return apiBaseUrl()
 }
 
 /** Default false: talk to real API. Set VITE_USE_MOCKS=true only for offline demo. */
 export function shouldUseBidMocks(): boolean {
-  const flag = String(readViteEnv().VITE_USE_MOCKS ?? 'false').toLowerCase()
-  return flag === 'true' || flag === '1' || flag === 'yes'
+  return shouldUseMocks()
 }
 
-export function readAccessToken(): string | null {
+const DEMO_ADMIN_USER_ID = '0190f4dd-0000-7000-8000-000000000001'
+
+/** Read the authenticated subject without adding a second auth state store. */
+export function getCurrentBidUserId(): string {
+  const token = readAccessToken()
+  if (!token) return DEMO_ADMIN_USER_ID
   try {
-    return sessionStorage.getItem(BID_ACCESS_TOKEN_KEY) || localStorage.getItem(BID_ACCESS_TOKEN_KEY)
+    const payload = token.split('.')[1]
+    if (!payload) return DEMO_ADMIN_USER_ID
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const claims = JSON.parse(atob(padded)) as { sub?: unknown }
+    return typeof claims.sub === 'string' && claims.sub ? claims.sub : DEMO_ADMIN_USER_ID
   } catch {
-    return null
+    return DEMO_ADMIN_USER_ID
   }
 }
 
-/** M3 login should call this after AuthSession is returned. */
-export function writeAccessToken(token: string | null) {
-  try {
-    if (!token) {
-      sessionStorage.removeItem(BID_ACCESS_TOKEN_KEY)
-      localStorage.removeItem(BID_ACCESS_TOKEN_KEY)
-      return
-    }
-    sessionStorage.setItem(BID_ACCESS_TOKEN_KEY, token)
-  } catch {
-    /* ignore */
-  }
-}
+export { readAccessToken }

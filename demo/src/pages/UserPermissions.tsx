@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Table, Tag, Avatar, Button, Input, Segmented, Card, Modal, Select, Tooltip, Form, message, Dropdown, Empty, Drawer, Descriptions, Timeline } from 'antd'
 import { UserPlus, Search, ShieldCheck, Users as UsersIcon, UserCheck, MoreHorizontal, Mail, Ban, History, Building2, Send, FolderKanban, KeyRound } from 'lucide-react'
 import { roleMap, permissionMatrix } from '../mock/data'
 import type { ColumnsType } from 'antd/es/table'
 import { useDemo } from '../context/DemoContext'
+import { platformApi, type AuditEvent, type PermissionMatrix, type ProjectSummary, type RoleDefinition, type User } from '../api/platformApi'
+import { shouldUseMocks } from '../api/runtime'
 
 const statusMap: Record<string, { label: string; color: string; bg: string }> = {
   active: { label: '活跃', color: '#16A34A', bg: '#F0FDF4' },
@@ -12,6 +14,13 @@ const statusMap: Record<string, { label: string; color: string; bg: string }> = 
 
 export default function UserPermissions() {
   const { users, setUsers } = useDemo()
+  const mockMode = shouldUseMocks()
+  const [loading, setLoading] = useState(false)
+  const [roles, setRoles] = useState<RoleDefinition[]>([])
+  const [serverMatrix, setServerMatrix] = useState<PermissionMatrix | null>(null)
+  const [drawerProjects, setDrawerProjects] = useState<ProjectSummary[]>([])
+  const [drawerActivity, setDrawerActivity] = useState<AuditEvent[]>([])
+  const [drawerLoading, setDrawerLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -22,6 +31,41 @@ export default function UserPermissions() {
   const [drawerUser, setDrawerUser] = useState<any>(null)
   const [drawerTab, setDrawerTab] = useState<'projects' | 'activity'>('projects')
   const [form] = Form.useForm()
+
+  const normalizeUser = useCallback((user: User) => ({
+    ...user,
+    avatar: user.name.slice(0, 2).toUpperCase(),
+    projects: user.projectCount,
+    lastLogin: user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('zh-CN', { hour12: false }) : '尚未登录',
+    status: user.status === 'active' ? 'active' : 'inactive',
+    apiStatus: user.status,
+    invitationStatus: user.status === 'invited' ? 'pending' : 'accepted',
+    invitedAt: new Date(user.createdAt).toLocaleString('zh-CN', { hour12: false }),
+  }), [])
+
+  const refreshUsers = useCallback(async () => {
+    if (mockMode) return
+    setLoading(true)
+    try {
+      const [userPage, roleRows, matrix] = await Promise.all([
+        platformApi.listUsers({ page: 1, pageSize: 100, sortBy: 'createdAt', sortOrder: 'desc' }),
+        platformApi.listRoles(),
+        platformApi.getPermissionMatrix(),
+      ])
+      setUsers(userPage.data.map(normalizeUser))
+      setRoles(roleRows)
+      setServerMatrix(matrix)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '用户与权限数据加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [mockMode, normalizeUser, setUsers])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void refreshUsers(), 0)
+    return () => window.clearTimeout(timeout)
+  }, [refreshUsers])
 
   const stats = [
     { label: '总用户数', value: users.length, icon: UsersIcon, color: '#2563EB', bg: '#EFF6FF' },
@@ -38,6 +82,22 @@ export default function UserPermissions() {
     return matchSearch && matchRole && matchStatus && matchDepartment
   })
   const departments = Array.from(new Set(users.map(user => user.department)))
+  const roleDefinitions = roles.length ? roles : Object.entries(roleMap).map(([role, value]) => ({
+    role,
+    label: value.label,
+    description: role === 'admin' ? '系统全局管理，拥有所有权限' : role === 'project_lead' ? '创建管理投标任务，协调团队成员' : role === 'reviewer' ? '审核投标文件质量，把控风险' : '上传材料和下载文档，参与协作',
+    permissions: [],
+    userCount: users.filter(user => user.role === role).length,
+  })) as RoleDefinition[]
+  const permissionRows = serverMatrix
+    ? serverMatrix.modules.map(item => ({
+        module: ({ users: '用户管理', projects: '项目管理', bids: '投标与评标', settings: '系统设置', audit: '审计日志', files: '文件管理' } as Record<string, string>)[item.module] || item.module,
+        actions: Object.fromEntries(Object.keys(roleMap).map(role => [
+          role,
+          Object.entries(item.actions).filter(([, allowedRoles]) => allowedRoles.includes(role)).map(([action]) => action).join('、') || '无',
+        ])),
+      }))
+    : permissionMatrix
 
   const openUserForm = (user?: any) => {
     setEditingUser(user || null)
@@ -51,6 +111,47 @@ export default function UserPermissions() {
       message.error('该邮箱已存在，请检查后重试')
       return
     }
+    if (!mockMode) {
+      setLoading(true)
+      try {
+        if (editingUser) {
+          let updated = await platformApi.updateUser(editingUser.id, editingUser.version, {
+            name: values.name,
+            phone: values.phone || undefined,
+            role: values.role,
+            department: values.department,
+          })
+          const requestedStatus = values.status === 'active' ? 'active' : 'disabled'
+          const shouldChangeStatus = editingUser.apiStatus === 'invited'
+            ? requestedStatus === 'active'
+            : requestedStatus !== editingUser.apiStatus
+          if (shouldChangeStatus) {
+            updated = await platformApi.setUserStatus(editingUser.id, requestedStatus, '管理员在用户权限页面调整账号状态')
+          }
+          setUsers(previous => previous.map(item => item.id === editingUser.id ? normalizeUser(updated) : item))
+        } else {
+          const result = await platformApi.inviteUser({
+            email: values.email,
+            name: values.name,
+            phone: values.phone || undefined,
+            role: values.role,
+            department: values.department,
+          })
+          setUsers(previous => [normalizeUser(result.user), ...previous])
+        }
+        setShowAddModal(false)
+        setEditingUser(null)
+        form.resetFields()
+        message.success(editingUser ? '用户信息已更新' : '用户已添加并发送邀请')
+      } catch (error) {
+        await refreshUsers()
+        message.error(error instanceof Error ? error.message : '用户保存失败')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
     const user = {
       ...editingUser,
       ...values,
@@ -76,21 +177,70 @@ export default function UserPermissions() {
       content: nextStatus === 'inactive' ? '停用后该用户将无法继续进入系统，已有项目记录不会删除。' : '启用后该用户可恢复访问其授权范围内的功能。',
       okText: nextStatus === 'active' ? '确认启用' : '确认停用',
       okButtonProps: { danger: nextStatus === 'inactive' },
-      onOk: () => {
+      onOk: async () => {
+        if (!mockMode) {
+          try {
+            const updated = await platformApi.setUserStatus(record.id, nextStatus === 'active' ? 'active' : 'disabled', nextStatus === 'active' ? '管理员启用账号' : '管理员停用账号')
+            setUsers(previous => previous.map(item => item.id === record.id ? normalizeUser(updated) : item))
+            message.success(`用户已${nextStatus === 'active' ? '启用' : '停用'}`)
+          } catch (error) {
+            message.error(error instanceof Error ? error.message : '账号状态更新失败')
+            throw error
+          }
+          return
+        }
         setUsers(prev => prev.map(item => item.id === record.id ? { ...item, status: nextStatus } : item))
         message.success(`用户已${nextStatus === 'active' ? '启用' : '停用'}`)
       },
     })
   }
 
+  const loadDrawerData = async (record: any, tab: 'projects' | 'activity') => {
+    if (mockMode) return
+    setDrawerLoading(true)
+    try {
+      if (tab === 'projects') {
+        const result = await platformApi.getUserProjects(record.id)
+        setDrawerProjects(result.data)
+      } else {
+        const result = await platformApi.getUserActivity(record.id)
+        setDrawerActivity(result.data)
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '用户详情加载失败')
+    } finally {
+      setDrawerLoading(false)
+    }
+  }
+
   const openUserDrawer = (record: any, tab: 'projects' | 'activity') => {
     setDrawerUser(record)
     setDrawerTab(tab)
+    void loadDrawerData(record, tab)
   }
 
-  const resendInvitation = (record: any) => {
+  const resendInvitation = async (record: any) => {
+    if (!mockMode) {
+      try {
+        await platformApi.resendInvitation(record.id)
+        message.success(`邀请邮件已重新发送至 ${record.email}`)
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '邀请邮件发送失败')
+      }
+      return
+    }
     setUsers(previous => previous.map(item => item.id === record.id ? { ...item, invitationStatus: item.invitationStatus || 'accepted', invitationResentAt: new Date().toLocaleString('zh-CN', { hour12: false }) } : item))
     message.success(`邀请邮件已重新发送至 ${record.email}`)
+  }
+
+  const sendPasswordReset = async (record: any) => {
+    try {
+      if (!mockMode) await platformApi.sendPasswordReset(record.id)
+      message.success('密码重置邮件已发送')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '密码重置邮件发送失败')
+      throw error
+    }
   }
 
   const columns: ColumnsType<any> = [
@@ -167,13 +317,13 @@ export default function UserPermissions() {
           <Dropdown
             trigger={['click']}
             menu={{ items: [
-              { key: 'resend', label: '重发邀请邮件', icon: <Send size={14} /> },
+              { key: 'resend', label: '重发邀请邮件', icon: <Send size={14} />, disabled: record.invitationStatus !== 'pending' },
               { key: 'reset', label: '发送密码重置邮件', icon: <Mail size={14} /> },
               { key: 'status', label: record.status === 'active' ? '停用用户' : '启用用户', icon: <Ban size={14} />, danger: record.status === 'active' },
               { key: 'logs', label: '查看活动记录', icon: <History size={14} /> },
             ], onClick: ({ key }) => {
-              if (key === 'resend') resendInvitation(record)
-              if (key === 'reset') Modal.confirm({ title: `向 ${record.name} 发送密码重置邮件？`, content: `重置链接将发送至 ${record.email}，不会在页面生成或展示临时密码。`, okText: '发送邮件', onOk: () => message.success('密码重置邮件已发送（Demo）') })
+              if (key === 'resend') void resendInvitation(record)
+              if (key === 'reset') Modal.confirm({ title: `向 ${record.name} 发送密码重置邮件？`, content: `重置链接将发送至 ${record.email}，不会在页面生成或展示临时密码。`, okText: '发送邮件', onOk: () => sendPasswordReset(record) })
               if (key === 'status') toggleUserStatus(record)
               if (key === 'logs') openUserDrawer(record, 'activity')
             } }}
@@ -278,6 +428,7 @@ export default function UserPermissions() {
             <Table
               columns={columns}
               dataSource={filteredUsers}
+              loading={loading}
               rowKey="id"
               pagination={{ pageSize: 8, showSizeChanger: false }}
               locale={{ emptyText: <Empty description="当前筛选条件下没有用户" /> }}
@@ -295,32 +446,30 @@ export default function UserPermissions() {
 
           {/* Role cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-6">
-            {Object.entries(roleMap).map(([key, role]) => (
-              <div key={key} className="rounded-xl border border-[#E2E8F0] p-4">
+            {roleDefinitions.map(definition => {
+              const role = roleMap[definition.role]
+              return <div key={definition.role} className="rounded-xl border border-[#E2E8F0] p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: role.bg }}>
-                    <ShieldCheck size={15} color={role.color} />
+                    <ShieldCheck size={15} color={role?.color} />
                   </div>
-                  <Tag style={{ color: role.color, background: role.bg, border: 'none' }} className="!text-xs !font-medium">
-                    {role.label}
+                  <Tag style={{ color: role?.color, background: role?.bg, border: 'none' }} className="!text-xs !font-medium">
+                    {definition.label}
                   </Tag>
                 </div>
                 <div className="text-xs text-[#64748B]">
-                  {key === 'admin' && '系统全局管理，拥有所有权限'}
-                  {key === 'project_lead' && '创建管理投标任务，协调团队成员'}
-                  {key === 'member' && '上传材料和下载文档，参与协作'}
-                  {key === 'reviewer' && '审核投标文件质量，把控风险'}
+                  {definition.description}
                 </div>
-                <div className="mt-2 text-xs font-medium" style={{ color: role.color }}>
-                  {users.filter(u => u.role === key).length} 人
+                <div className="mt-2 text-xs font-medium" style={{ color: role?.color }}>
+                  {definition.userCount} 人
                 </div>
               </div>
-            ))}
+            })}
           </div>
 
           {/* Permission table */}
           <Table
-            dataSource={permissionMatrix}
+            dataSource={permissionRows}
             rowKey="module"
             pagination={false}
             size="middle"
@@ -393,16 +542,18 @@ export default function UserPermissions() {
             <Segmented
               block
               value={drawerTab}
-              onChange={value => setDrawerTab(value as 'projects' | 'activity')}
+              onChange={value => { const tab = value as 'projects' | 'activity'; setDrawerTab(tab); void loadDrawerData(drawerUser, tab) }}
               options={[{ value: 'projects', label: '参与项目', icon: <FolderKanban size={13} /> }, { value: 'activity', label: '活动记录', icon: <History size={13} /> }]}
               className="mb-5"
             />
-            {drawerTab === 'projects' ? (
-              drawerUser.projects ? <div className="space-y-3">{[
+            {drawerLoading ? <div className="py-10 text-center text-sm text-[#94A3B8]">正在加载…</div> : drawerTab === 'projects' ? (
+              !mockMode ? (drawerProjects.length ? <div className="space-y-3">{drawerProjects.map(project => <div key={project.id} className="rounded-xl border border-[#E2E8F0] p-4"><div className="font-medium text-[#1E293B]">{project.title}</div><div className="mt-2 flex gap-2"><Tag>{project.kind === 'bid' ? '投标任务' : '评标任务'}</Tag><Tag color="blue">{project.userRole}</Tag><Tag>{project.status}</Tag></div></div>)}</div> : <Empty description="当前未参与任何项目" />) : drawerUser.projects ? <div className="space-y-3">{[
                 ['2026年深圳市政务云平台采购项目', '投标任务', '项目负责人'],
                 ['智慧城市数据中台建设项目', '投标任务', '协作成员'],
                 ['华南数字化转型服务评标', '评标任务', '评审人'],
               ].slice(0, Math.min(drawerUser.projects, 3)).map(([name, type, role]) => <div key={name} className="rounded-xl border border-[#E2E8F0] p-4"><div className="font-medium text-[#1E293B]">{name}</div><div className="mt-2 flex gap-2"><Tag>{type}</Tag><Tag color="blue">{role}</Tag></div></div>)}</div> : <Empty description="当前未参与任何项目" />
+            ) : !mockMode ? (
+              drawerActivity.length ? <Timeline items={drawerActivity.map(event => ({ color: 'blue', children: `${new Date(event.createdAt).toLocaleString('zh-CN', { hour12: false })} · ${event.summary}` }))} /> : <Empty description="暂无活动记录" />
             ) : (
               <Timeline items={[
                 { color: 'blue', children: `${drawerUser.lastLogin} · 登录系统` },
@@ -412,8 +563,8 @@ export default function UserPermissions() {
               ]} />
             )}
             <div className="mt-5 flex gap-2">
-              <Button icon={<Send size={14} />} onClick={() => resendInvitation(drawerUser)}>重发邀请</Button>
-              <Button icon={<KeyRound size={14} />} onClick={() => message.success('密码重置邮件已发送')}>发送密码重置邮件</Button>
+              <Button icon={<Send size={14} />} disabled={drawerUser.invitationStatus !== 'pending'} onClick={() => void resendInvitation(drawerUser)}>重发邀请</Button>
+              <Button icon={<KeyRound size={14} />} onClick={() => void sendPasswordReset(drawerUser)}>发送密码重置邮件</Button>
             </div>
           </div>
         )}

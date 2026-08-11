@@ -398,8 +398,13 @@ class PortalService:
     async def submit(self, portal: PortalPrincipal, *, confirmed: bool, idempotency_key: str | None) -> dict[str, Any]:
         if not confirmed:
             raise validation_error("必须确认正式提交")
+        cache_key = (
+            f"portal-submit:{portal.tenant_id}:{portal.evaluation_id}:{portal.supplier_id}:{idempotency_key}"
+            if idempotency_key
+            else None
+        )
         if idempotency_key:
-            cached = self.store.get_idempotency(f"portal-submit:{idempotency_key}")
+            cached = self.store.get_idempotency(cast(str, cache_key))
             if cached is not None:
                 return cast(dict[str, Any], cached)
         entity = self._assert_open(portal)
@@ -442,8 +447,8 @@ class PortalService:
             "submittedMaterialCount": len(submissions),
             "sha256": digest,
         }
-        if idempotency_key:
-            self.store.remember_idempotency(f"portal-submit:{idempotency_key}", receipt)
+        if cache_key:
+            self.store.remember_idempotency(cache_key, receipt)
         self.store.add_activity(
             PortalActivityEntity(
                 id=new_id(),

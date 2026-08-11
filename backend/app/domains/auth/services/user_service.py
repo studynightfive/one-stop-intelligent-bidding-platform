@@ -3,13 +3,14 @@
 提供用户管理功能。
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import ForbiddenError, NotFoundError, ValidationError
+from app.core.security import create_action_token
 from app.domains.auth.models.user import User, UserRole, UserStatus
 
 
@@ -23,6 +24,7 @@ class UserService:
         self,
         user_id: UUID,
         include_deleted: bool = False,
+        tenant_id: UUID | None = None,
     ) -> User | None:
         """根据ID获取用户.
 
@@ -34,6 +36,8 @@ class UserService:
             用户对象或None
         """
         stmt = select(User).where(User.id == user_id)
+        if tenant_id is not None:
+            stmt = stmt.where(User.tenant_id == tenant_id)
         if not include_deleted:
             stmt = stmt.where(User.deleted_at.is_(None))
         result = await self.db.execute(stmt)
@@ -66,6 +70,8 @@ class UserService:
         role: UserRole | None = None,
         department: str | None = None,
         status: UserStatus | None = None,
+        sort_by: str = "createdAt",
+        sort_order: str = "desc",
     ) -> tuple[list[User], int]:
         """分页查询用户列表.
 
@@ -77,6 +83,8 @@ class UserService:
             role: 角色筛选
             department: 部门筛选
             status: 状态筛选
+            sort_by: 排序字段
+            sort_order: 排序方向
 
         Returns:
             (用户列表, 总数)
@@ -106,7 +114,14 @@ class UserService:
 
         # 分页
         offset = (page - 1) * page_size
-        stmt = stmt.offset(offset).limit(page_size).order_by(User.created_at.desc())
+        sort_columns = {
+            "createdAt": User.created_at,
+            "name": User.name,
+            "email": User.email,
+        }
+        sort_column = sort_columns.get(sort_by, User.created_at)
+        order_expression = sort_column.asc() if sort_order == "asc" else sort_column.desc()
+        stmt = stmt.order_by(order_expression).offset(offset).limit(page_size)
 
         result = await self.db.execute(stmt)
         users = list(result.scalars().all())
@@ -170,9 +185,38 @@ class UserService:
         await self.db.commit()
         await self.db.refresh(user)
 
-        # TODO: 发送邀请邮件
-
         return user
+
+    @staticmethod
+    def create_invitation_token(user: User) -> tuple[str, datetime]:
+        """Create a 24-hour invitation token tied to the current user version."""
+        expires_at = datetime.now(UTC) + timedelta(hours=24)
+        token = create_action_token(
+            str(user.id),
+            token_type="invitation",
+            expires_delta=timedelta(hours=24),
+            additional_claims={
+                "tenant_id": str(user.tenant_id),
+                "credential_version": user.updated_at.isoformat(),
+            },
+        )
+        return token, expires_at
+
+    async def get_invited_user(self, user_id: UUID, tenant_id: UUID) -> User:
+        """Return an invited user within the caller tenant."""
+        user = await self.get_user_by_id(user_id, tenant_id=tenant_id)
+        if user is None or user.status != UserStatus.INVITED:
+            raise NotFoundError(resource_type="invitation", resource_id=str(user_id))
+        return user
+
+    async def count_users_by_role(self, tenant_id: UUID) -> dict[UserRole, int]:
+        """Return live role totals for role metadata."""
+        result = await self.db.execute(
+            select(User.role, func.count(User.id))
+            .where(User.tenant_id == tenant_id, User.deleted_at.is_(None))
+            .group_by(User.role)
+        )
+        return {role: count for role, count in result.all()}
 
     async def update_user(
         self,
@@ -181,6 +225,7 @@ class UserService:
         phone: str | None = None,
         department: str | None = None,
         role: UserRole | None = None,
+        tenant_id: UUID | None = None,
     ) -> User:
         """更新用户信息.
 
@@ -197,7 +242,7 @@ class UserService:
         Raises:
             NotFoundError: 用户不存在
         """
-        user = await self.get_user_by_id(user_id)
+        user = await self.get_user_by_id(user_id, tenant_id=tenant_id)
         if not user:
             raise NotFoundError(resource_type="user", resource_id=str(user_id))
 
@@ -220,6 +265,8 @@ class UserService:
         user_id: UUID,
         status: UserStatus,
         reason: str | None = None,
+        tenant_id: UUID | None = None,
+        actor_id: UUID | None = None,
     ) -> User:
         """设置用户状态（启用/禁用）.
 
@@ -235,9 +282,13 @@ class UserService:
             NotFoundError: 用户不存在
             ForbiddenError: 不能禁用自己或超级管理员
         """
-        user = await self.get_user_by_id(user_id)
+        user = await self.get_user_by_id(user_id, tenant_id=tenant_id)
         if not user:
             raise NotFoundError(resource_type="user", resource_id=str(user_id))
+        if status == UserStatus.DISABLED and actor_id == user_id:
+            raise ForbiddenError(message="不能禁用当前登录账号")
+        if status == UserStatus.DISABLED and user.is_super_admin:
+            raise ForbiddenError(message="不能禁用超级管理员")
 
         user.status = status
         await self.db.commit()

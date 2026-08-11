@@ -14,7 +14,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from app.core.dependencies import AuthenticatedUser, DBSession
 from app.core.errors import (
@@ -22,45 +23,36 @@ from app.core.errors import (
     InvalidCredentialsError,
     TokenExpiredError,
 )
+from app.core.http import success_response
+from app.domains.auth.mappers import ROLE_PERMISSIONS, user_to_data
 from app.domains.auth.schemas.auth import (
-    AuthSession,
     ForgotPasswordRequest,
-    ForgotPasswordResponse,
     LoginRequest,
-    LogoutResponse,
     ResetPasswordRequest,
-    ResetPasswordResponse,
     UpdateProfileRequest,
-    UserResponse,
 )
 from app.domains.auth.services.auth_service import AuthService
+from app.domains.auth.services.email_service import EmailService
 from app.domains.auth.services.user_service import UserService
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
 
-def _user_to_response(user: Any) -> UserResponse:
-    """将User模型转换为响应模型."""
-    return UserResponse(
-        id=user.id,
-        tenant_id=user.tenant_id,
-        email=user.email,
-        name=user.name,
-        phone=user.phone,
-        role=user.role.value,
-        department=user.department,
-        status=user.status.value,
-        project_count=0,  # TODO: 从数据库查询
-        last_login_at=user.last_login_at,
-        version=1,  # TODO: 添加version字段
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
+def _auth_session(user: Any, tokens: dict[str, Any]) -> dict[str, Any]:
+    role = user.role.value
+    return {
+        "accessToken": tokens["access_token"],
+        "accessTokenExpiresAt": datetime.fromtimestamp(
+            datetime.now(UTC).timestamp() + tokens["expires_in"],
+            tz=UTC,
+        ),
+        "user": user_to_data(user),
+        "permissions": ROLE_PERMISSIONS.get(role, []),
+    }
 
 
 @router.post(
     "/login",
-    response_model=AuthSession,
     summary="用户登录",
     description="使用邮箱和密码登录，返回Access Token和用户信息。",
     responses={
@@ -69,21 +61,19 @@ def _user_to_response(user: Any) -> UserResponse:
     },
 )
 async def login(
-    request: LoginRequest,
-    response: Response,
+    payload: LoginRequest,
+    http_request: Request,
     db: DBSession,
-) -> AuthSession:
+) -> JSONResponse:
     """用户登录."""
     from app.core.config import settings
 
     auth_service = AuthService(db)
 
     try:
-        user = await auth_service.authenticate(request.email, request.password)
+        user = await auth_service.authenticate(payload.email, payload.password)
         tokens = await auth_service.create_tokens(user)
-        user_response = _user_to_response(user)
-
-        # 设置 Refresh Token Cookie
+        response = success_response(_auth_session(user, tokens), request=http_request)
         response.set_cookie(
             key=settings.refresh_token_cookie_name,
             value=tokens["refresh_token"],
@@ -93,15 +83,7 @@ async def login(
             samesite=settings.refresh_token_cookie_same_site,
         )
 
-        return AuthSession(
-            access_token=tokens["access_token"],
-            access_token_expires_at=datetime.fromtimestamp(
-                datetime.now(UTC).timestamp() + tokens["expires_in"],
-                tz=UTC,
-            ),
-            user=user_response,
-            permissions=[],  # TODO: 从角色获取
-        )
+        return response
     except InvalidCredentialsError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,7 +93,6 @@ async def login(
 
 @router.post(
     "/refresh",
-    response_model=AuthSession,
     summary="刷新Token",
     description="使用Refresh Token获取新的Access Token。",
     responses={
@@ -122,7 +103,7 @@ async def login(
 async def refresh_token(
     request: Request,
     db: DBSession,
-) -> AuthSession:
+) -> JSONResponse:
     """刷新Token."""
     from app.core.config import settings
 
@@ -142,15 +123,18 @@ async def refresh_token(
         user_id = UUID(tokens["user_id"])
         user = await auth_service.get_user_by_id(user_id)
 
-        return AuthSession(
-            access_token=tokens["access_token"],
-            access_token_expires_at=datetime.fromtimestamp(
-                datetime.now(UTC).timestamp() + tokens["expires_in"],
-                tz=UTC,
-            ),
-            user=_user_to_response(user) if user else None,
-            permissions=[],
+        if user is None:
+            raise AuthenticationError(message="用户不存在或已被禁用")
+        response = success_response(_auth_session(user, tokens), request=request)
+        response.set_cookie(
+            key=settings.refresh_token_cookie_name,
+            value=tokens["refresh_token"],
+            max_age=settings.refresh_token_cookie_max_age,
+            secure=settings.refresh_token_cookie_secure,
+            httponly=settings.refresh_token_cookie_http_only,
+            samesite=settings.refresh_token_cookie_same_site,
         )
+        return response
     except TokenExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -165,7 +149,6 @@ async def refresh_token(
 
 @router.post(
     "/logout",
-    response_model=LogoutResponse,
     summary="登出",
     description="使当前Token失效。",
     responses={
@@ -174,9 +157,9 @@ async def refresh_token(
     },
 )
 async def logout(
+    request: Request,
     current_user: AuthenticatedUser,
-    response: Response,
-) -> LogoutResponse:
+) -> JSONResponse:
     """用户登出."""
     from app.core.config import settings
     from app.core.redis import add_token_to_blacklist
@@ -188,7 +171,7 @@ async def logout(
         exp_seconds = settings.jwt_access_token_ttl_minutes * 60
         await add_token_to_blacklist(jti, exp_seconds)
 
-    # 清除 Refresh Token Cookie
+    response = success_response({"loggedOut": True}, request=request)
     response.delete_cookie(
         key=settings.refresh_token_cookie_name,
         secure=settings.refresh_token_cookie_secure,
@@ -196,12 +179,11 @@ async def logout(
         samesite=settings.refresh_token_cookie_same_site,
     )
 
-    return LogoutResponse(logged_out=True)
+    return response
 
 
 @router.get(
     "/me",
-    response_model=UserResponse,
     summary="获取当前用户",
     description="获取当前登录用户的信息。",
     responses={
@@ -210,9 +192,10 @@ async def logout(
     },
 )
 async def get_current_user_info(
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> UserResponse:
+) -> JSONResponse:
     """获取当前用户信息."""
     auth_service = AuthService(db)
     user = await auth_service.get_user_by_id(UUID(current_user["id"]))
@@ -223,12 +206,11 @@ async def get_current_user_info(
             detail={"code": "NOT_FOUND", "message": "用户不存在"},
         )
 
-    return _user_to_response(user)
+    return success_response(user_to_data(user), request=request)
 
 
 @router.patch(
     "/me",
-    response_model=UserResponse,
     summary="更新个人资料",
     description="更新当前登录用户的个人资料。",
     responses={
@@ -237,24 +219,24 @@ async def get_current_user_info(
     },
 )
 async def update_profile(
-    request: UpdateProfileRequest,
+    payload: UpdateProfileRequest,
+    request: Request,
     current_user: AuthenticatedUser,
     db: DBSession,
-) -> UserResponse:
+) -> JSONResponse:
     """更新个人资料."""
     user_service = UserService(db)
     user = await user_service.update_user(
         user_id=UUID(current_user["id"]),
-        name=request.name,
-        phone=request.phone,
-        department=request.department,
+        name=payload.name,
+        phone=payload.phone,
+        department=payload.department,
     )
-    return _user_to_response(user)
+    return success_response(user_to_data(user), request=request)
 
 
 @router.post(
     "/password/forgot",
-    response_model=ForgotPasswordResponse,
     summary="忘记密码",
     description="发送密码重置邮件。",
     responses={
@@ -262,20 +244,22 @@ async def update_profile(
     },
 )
 async def forgot_password(
-    request: ForgotPasswordRequest,
+    payload: ForgotPasswordRequest,
+    request: Request,
     db: DBSession,
-) -> ForgotPasswordResponse:
+) -> JSONResponse:
     """忘记密码."""
-    # TODO: 实现发送重置邮件逻辑
-    # 1. 查询用户
-    # 2. 生成重置Token
-    # 3. 发送邮件
-    return ForgotPasswordResponse(accepted=True)
+    auth_service = AuthService(db)
+    user = await auth_service.get_active_user_by_email(payload.email)
+    if user is not None:
+        token = auth_service.create_password_reset_token(user)
+        await EmailService().send_password_reset(email=user.email, name=user.name, token=token)
+    # 始终返回相同结果，避免暴露邮箱是否存在。
+    return success_response({"accepted": True}, request=request)
 
 
 @router.post(
     "/password/reset",
-    response_model=ResetPasswordResponse,
     summary="重置密码",
     description="使用重置Token设置新密码。",
     responses={
@@ -284,11 +268,16 @@ async def forgot_password(
     },
 )
 async def reset_password(
-    request: ResetPasswordRequest,
+    payload: ResetPasswordRequest,
+    request: Request,
     db: DBSession,
-) -> ResetPasswordResponse:
+) -> JSONResponse:
     """重置密码."""
-    # TODO: 实现重置密码逻辑
-    # 1. 验证Token
-    # 2. 更新密码
-    return ResetPasswordResponse(reset=True)
+    try:
+        await AuthService(db).reset_password(payload.reset_token, payload.new_password)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_RESET_TOKEN", "message": exc.message},
+        ) from exc
+    return success_response({"reset": True}, request=request)

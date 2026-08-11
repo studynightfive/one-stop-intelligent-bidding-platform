@@ -16,9 +16,12 @@ export function mapBidTaskToViewModel(task: BidTask): BidTaskViewModel {
     currentStep: task.currentStep,
     progress: task.progressPercent,
     assignee: task.assignee?.name || '',
+    assigneeId: task.assignee?.id,
     materialTotal: task.materialSummary?.total ?? 0,
     materialHave: task.materialSummary?.have ?? 0,
     materialMissing: task.materialSummary?.missing ?? 0,
+    linkedEvaluationId: task.linkedEvaluationId,
+    version: task.version,
     createdAt: task.createdAt,
     tags: task.tags,
   }

@@ -19,7 +19,6 @@ from app.domains.evaluations.entities import (
 )
 from app.domains.evaluations.errors import (
     conflict,
-    deadline_passed,
     not_found,
     validation_error,
     version_conflict,
@@ -36,6 +35,7 @@ from app.domains.evaluations.mappers import (
 from app.domains.evaluations.money import parse_money, parse_score, parse_weight
 from app.domains.evaluations.ports import (
     AuditEventInput,
+    AuditEventSnapshot,
     AuditServicePort,
     AuthPrincipal,
     BidTaskSnapshotPort,
@@ -63,6 +63,26 @@ def _parse_dt(value: datetime | str) -> datetime:
         return value if value.tzinfo else value.replace(tzinfo=UTC)
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _audit_event_dict(event: AuditEventSnapshot) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "tenantId": event.tenant_id,
+        "aggregateType": event.aggregate_type,
+        "aggregateId": event.aggregate_id,
+        "actorType": event.actor_type,
+        "actorId": event.actor_id,
+        "actorName": event.actor_name,
+        "action": event.action,
+        "targetType": event.target_type,
+        "targetId": event.target_id,
+        "summary": event.summary,
+        "changes": list(event.changes) or None,
+        "requestId": event.request_id,
+        "ipAddress": event.ip_address,
+        "createdAt": event.created_at.isoformat().replace("+00:00", "Z"),
+    }
 
 
 class EvaluationService:
@@ -237,6 +257,40 @@ class EvaluationService:
         require_viewer(actor, entity)
         return evaluation_detail_dict(entity, store=self.store)
 
+    async def list_audit_events(
+        self,
+        actor: AuthPrincipal,
+        evaluation_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        actor_filter: str | None = None,
+        action: str | None = None,
+        resource: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
+        require_viewer(actor, entity)
+        events, total = await self.audit.list_events(
+            tenant_id=actor.tenant_id,
+            aggregate_type="evaluation",
+            aggregate_id=evaluation_id,
+            actor=actor_filter,
+            action=action,
+            resource=resource,
+            date_from=date_from,
+            date_to=date_to,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        return [_audit_event_dict(event) for event in events], {
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+            "totalPages": (total + page_size - 1) // page_size,
+        }
+
     async def update(
         self, actor: AuthPrincipal, evaluation_id: str, payload: dict[str, Any], *, if_match: int | None
     ) -> dict[str, Any]:
@@ -410,12 +464,13 @@ class EvaluationService:
         }
 
     async def publish(self, actor: AuthPrincipal, evaluation_id: str, *, idempotency_key: str | None) -> dict[str, Any]:
-        if idempotency_key:
-            cached = self.store.get_idempotency(f"publish:{idempotency_key}")
-            if cached is not None:
-                return cast(dict[str, Any], cached)
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_owner(actor, entity)
+        cache_key = f"publish:{actor.tenant_id}:{evaluation_id}:{idempotency_key}" if idempotency_key else None
+        if idempotency_key:
+            cached = self.store.get_idempotency(cast(str, cache_key))
+            if cached is not None:
+                return cast(dict[str, Any], cached)
         assert_evaluation_transition(entity.status, "collecting")
         validation = validate_evaluation(entity, now=_now())
         if not validation["valid"]:
@@ -465,8 +520,8 @@ class EvaluationService:
         entity.updated_at = now
         saved = self.store.save_evaluation(entity)
         result = {"evaluation": evaluation_dict(saved, store=self.store), "invites": invites}
-        if idempotency_key:
-            self.store.remember_idempotency(f"publish:{idempotency_key}", result)
+        if cache_key:
+            self.store.remember_idempotency(cache_key, result)
         await self.audit.append(
             AuditEventInput(
                 tenant_id=actor.tenant_id,
@@ -514,17 +569,19 @@ class EvaluationService:
     async def close(
         self, actor: AuthPrincipal, evaluation_id: str, result_summary: str, *, idempotency_key: str | None
     ) -> dict[str, Any]:
-        if idempotency_key:
-            cached = self.store.get_idempotency(f"close:{idempotency_key}")
-            if cached is not None:
-                return cast(dict[str, Any], cached)
         entity = self.store.get_evaluation(evaluation_id, tenant_id=actor.tenant_id)
         require_owner(actor, entity)
+        summary = result_summary.strip()
+        if not summary:
+            raise validation_error("评标结果摘要不能为空")
+        cache_key = f"close:{actor.tenant_id}:{evaluation_id}:{idempotency_key}" if idempotency_key else None
+        if cache_key:
+            cached = self.store.get_idempotency(cache_key)
+            if cached is not None:
+                return cast(dict[str, Any], cached)
         assert_evaluation_transition(entity.status, "closed")
-        if entity.supplier_deadline > _now() and entity.status == "collecting":
-            raise deadline_passed("收集期未结束，不能关闭")
         entity.status = "closed"
-        entity.result_summary = result_summary.strip()
+        entity.result_summary = summary
         entity.current_step = 6
         entity.progress_percent = 100
         entity.version += 1
@@ -534,8 +591,8 @@ class EvaluationService:
                 supplier.invite_status = "expired"
         saved = self.store.save_evaluation(entity)
         result = evaluation_dict(saved, store=self.store)
-        if idempotency_key:
-            self.store.remember_idempotency(f"close:{idempotency_key}", result)
+        if cache_key:
+            self.store.remember_idempotency(cache_key, result)
         await self.audit.append(
             AuditEventInput(
                 tenant_id=actor.tenant_id,
@@ -545,7 +602,7 @@ class EvaluationService:
                 actor_id=actor.user_id,
                 actor_name=actor.name,
                 action="evaluation.closed",
-                summary=f"关闭评标：{result_summary.strip()}",
+                summary=f"关闭评标：{summary}",
             )
         )
         return result

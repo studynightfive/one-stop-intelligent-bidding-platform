@@ -64,7 +64,49 @@ def _register_m6_models() -> None:
     )
 
 
+def _register_m5_models() -> None:
+    """Explicitly register bid, document, qualification and fragment models."""
+
+    from app.domains.bids.models import (
+        BidIdempotencyModel,
+        BidJobBindingModel,
+        BidMaterialModel,
+        BidReviewFindingModel,
+        BidReviewReportModel,
+        BidTaskAssignmentModel,
+        BidTaskModel,
+        BidTenderRequirementModel,
+    )
+    from app.domains.documents.models import BidDocumentModel, BidDocumentVersionModel
+    from app.domains.fragments.models import FragmentModel, FragmentReferenceModel, FragmentVersionModel
+    from app.domains.qualifications.models import (
+        QualificationImportJobModel,
+        QualificationModel,
+        QualificationVersionModel,
+    )
+
+    _ = (
+        BidDocumentModel,
+        BidDocumentVersionModel,
+        BidIdempotencyModel,
+        BidJobBindingModel,
+        BidMaterialModel,
+        BidReviewFindingModel,
+        BidReviewReportModel,
+        BidTaskAssignmentModel,
+        BidTaskModel,
+        BidTenderRequirementModel,
+        FragmentModel,
+        FragmentReferenceModel,
+        FragmentVersionModel,
+        QualificationImportJobModel,
+        QualificationModel,
+        QualificationVersionModel,
+    )
+
+
 def register_models() -> None:
     """Load every merged domain model after the central Base is initialized."""
     _register_m4_models()
+    _register_m5_models()
     _register_m6_models()

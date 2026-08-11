@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from app.ai.technical_document import TechnicalDocumentOptions, TechnicalDocumentValidationError
 from app.domains.bids.enums import (
     BID_MATERIAL_CATEGORIES,
     BID_REVIEW_DECISIONS,
@@ -362,7 +363,7 @@ def validate_document_generate(payload: dict[str, Any]) -> dict[str, Any]:
         raise validation_error("请求体格式错误")
     reject_unknown(
         payload,
-        {"mode", "sections", "templateMode", "documentTemplateId", "includeWatermark"},
+        {"mode", "sections", "templateMode", "documentTemplateId", "includeWatermark", "technicalDocument"},
     )
     mode = payload.get("mode")
     sections = payload.get("sections") or []
@@ -376,12 +377,40 @@ def validate_document_generate(payload: dict[str, Any]) -> dict[str, Any]:
     if len(set(parsed_sections)) != len(parsed_sections):
         raise validation_error("sections 含重复项")
     template_mode = parse_enum(payload.get("templateMode"), TEMPLATE_MODES, field="templateMode")
+    technical_document: dict[str, Any] | None = None
+    if "technicalDocument" in payload and payload["technicalDocument"] is not None:
+        try:
+            validated = TechnicalDocumentOptions.from_mapping(payload["technicalDocument"])
+        except TechnicalDocumentValidationError as exc:
+            raise validation_error(
+                "technicalDocument 格式错误",
+                field_errors=[
+                    {
+                        "field": "technicalDocument",
+                        "code": "INVALID_TECHNICAL_DOCUMENT",
+                        "message": str(exc),
+                    }
+                ],
+            ) from exc
+        if "technical" not in parsed_sections:
+            raise validation_error(
+                "technicalDocument 仅能用于技术文档生成",
+                field_errors=[
+                    {
+                        "field": "sections",
+                        "code": "MISSING_TECHNICAL_SECTION",
+                        "message": "提供 technicalDocument 时 sections 必须包含 technical",
+                    }
+                ],
+            )
+        technical_document = validated.to_dict()
     return {
         "mode": parsed_mode,
         "sections": parsed_sections,
         "templateMode": template_mode,
         "documentTemplateId": require_id(payload, "documentTemplateId") if "documentTemplateId" in payload else None,
         "includeWatermark": parse_bool(payload.get("includeWatermark"), field="includeWatermark"),
+        "technicalDocument": technical_document,
     }
 
 
