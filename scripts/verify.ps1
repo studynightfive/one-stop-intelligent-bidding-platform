@@ -1,3 +1,7 @@
+param(
+    [switch]$IncludeE2E
+)
+
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -49,6 +53,32 @@ finally {
     Pop-Location
 }
 
+Push-Location "$repoRoot/e2e"
+try {
+    & npm run typecheck
+    if ($LASTEXITCODE -ne 0) { throw 'E2E typecheck failed' }
+    & npm run lint
+    if ($LASTEXITCODE -ne 0) { throw 'E2E lint failed' }
+    if ($IncludeE2E) {
+        $apiPort = if ($env:API_PORT) { $env:API_PORT } else { '8210' }
+        $webPort = if ($env:WEB_PORT) { $env:WEB_PORT } else { '3210' }
+        $apiBaseUrl = if ($env:E2E_API_URL) { $env:E2E_API_URL.TrimEnd('/') } else { "http://127.0.0.1:$apiPort" }
+        $webBaseUrl = if ($env:E2E_BASE_URL) { $env:E2E_BASE_URL.TrimEnd('/') } else { "http://127.0.0.1:$webPort" }
+        try {
+            Invoke-WebRequest -Uri "$apiBaseUrl/api/v1/health/ready" -UseBasicParsing -TimeoutSec 3 | Out-Null
+            Invoke-WebRequest -Uri "$webBaseUrl/healthz" -UseBasicParsing -TimeoutSec 3 | Out-Null
+        }
+        catch {
+            throw "E2E requires a healthy local stack at Web $webBaseUrl and API $apiBaseUrl. Start it first or set WEB_PORT/API_PORT."
+        }
+        & npm run test
+        if ($LASTEXITCODE -ne 0) { throw 'E2E tests failed' }
+    }
+}
+finally {
+    Pop-Location
+}
+
 & docker compose --env-file "$repoRoot/.env.example" -f "$repoRoot/infra/compose.yaml" config --quiet
 if ($LASTEXITCODE -ne 0) { throw 'Docker Compose validation failed' }
 
@@ -61,4 +91,9 @@ finally {
     Pop-Location
 }
 
-Write-Host '[OK] Full L0 foundation verification passed'
+if ($IncludeE2E) {
+    Write-Host '[OK] Full L0 verification, including real E2E, passed'
+}
+else {
+    Write-Host '[OK] Full L0 foundation verification passed (use -IncludeE2E with the default local stack for browser flows)'
+}
