@@ -13,6 +13,7 @@ import { shouldUseMocks } from '../api/runtime'
 import { bidNavigation } from '../features/bids/navigation'
 import { adminNavigation } from '../features/admin/navigation'
 import { evaluationNavigation } from '../features/admin/evaluationBridge'
+import { formatSearchResultSubtitle } from './searchPresentation'
 
 const { Sider, Header, Content } = Layout
 
@@ -88,8 +89,8 @@ export default function MainLayout() {
     const keyword = search.trim().toLowerCase()
     if (!keyword) return []
     const pages = [...bidNavItems, ...evalNavItems].map(item => ({ title: item.label, subtitle: '功能页面', path: item.key }))
-    const bids = bidTasks.map(task => ({ title: task.projectName, subtitle: task.tenderNo, path: `/tasks/${task.id}` }))
-    const evaluations = evaluationTasks.map(task => ({ title: task.projectName, subtitle: task.tenderNo, path: `/evaluation/${task.id}` }))
+    const bids = bidTasks.map(task => ({ title: task.projectName, subtitle: `投标任务 · ${task.tenderNo}`, path: `/tasks/${task.id}` }))
+    const evaluations = evaluationTasks.map(task => ({ title: task.projectName, subtitle: `评标任务 · ${task.tenderNo}`, path: `/evaluation/${task.id}` }))
     return [...pages, ...bids, ...evaluations]
       .filter(item => `${item.title} ${item.subtitle}`.toLowerCase().includes(keyword))
       .filter((item, index, items) => items.findIndex(candidate => candidate.path === item.path) === index)
@@ -114,7 +115,7 @@ export default function MainLayout() {
 
   const searchResults = mockMode
     ? localSearchResults
-    : liveSearchResults.map(item => ({ title: item.title, subtitle: item.subtitle || item.type, path: item.route }))
+    : liveSearchResults.map(item => ({ title: item.title, subtitle: formatSearchResultSubtitle(item), path: item.route }))
 
   const goTo = (path: string) => {
     navigate(path)
