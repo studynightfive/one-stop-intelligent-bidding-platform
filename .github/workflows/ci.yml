@@ -137,9 +137,8 @@ jobs:
       - name: Check E2E source
         run: npm run typecheck && npm run lint
         working-directory: e2e
-      - name: Install locked Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: e2e
+      - name: Check runner Chrome
+        run: google-chrome --version
       - name: Validate Compose
         run: docker compose --env-file .env.example -f infra/compose.yaml config --quiet
       - name: Build API and Web images
@@ -149,7 +148,7 @@ jobs:
       - name: Run real cross-device business flows
         env:
           CI: true
-          E2E_BROWSER_CHANNEL: chromium
+          E2E_BROWSER_CHANNEL: chrome
         run: npm run test
         working-directory: e2e
       - name: Tear down smoke stack
